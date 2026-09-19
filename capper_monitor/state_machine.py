@@ -87,7 +87,12 @@ class AlarmStateMachine:
             reason = "refill_in_progress" if prev_state != AlarmState.BLINK else "no_change"
         else:
             new_state = AlarmState.STEADY
-            reason = "line_detected" if prev_state != AlarmState.STEADY else "no_change"
+            if prev_state == AlarmState.BLINK:
+                reason = "refill_finished"
+            elif prev_state != AlarmState.STEADY:
+                reason = "line_detected"
+            else:
+                reason = "no_change"
 
         transitioned = new_state != prev_state
         self._state = new_state
@@ -109,5 +114,21 @@ class AlarmStateMachine:
             state=new_state,
             output_on=output_on,
             transitioned=transitioned,
+            reason=reason,
+        )
+
+    def force_normal(self, reason: str = "reset") -> StateMachineResult:
+        """デバウンサの内部タイマーには触れず、即座にNORMAL(出力OFF)へ強制する。
+
+        カメラ位置ズレ検知や検知処理エラーでライン検知結果を信用できない場合でも、
+        リセット操作（物理ボタン／PLC信号）は常に独立して効く必要があるために使う。
+        """
+        prev_state = self._state
+        self._state = AlarmState.NORMAL
+        self._blink_phase_start = None
+        return StateMachineResult(
+            state=AlarmState.NORMAL,
+            output_on=False,
+            transitioned=prev_state != AlarmState.NORMAL,
             reason=reason,
         )

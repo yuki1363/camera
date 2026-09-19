@@ -118,3 +118,40 @@ def test_startup_state_is_normal_with_output_off():
     assert r.output_on is False
     assert r.transitioned is False
     assert r.reason == "no_change"
+
+
+def test_blink_to_steady_reason_is_refill_finished():
+    m = make_machine()
+    m.update(True, False, False, now=0.0)
+    m.update(True, False, False, now=0.6)
+    m.update(True, True, False, now=0.7)
+    assert m.state == AlarmState.BLINK
+
+    r = m.update(True, False, False, now=0.8)
+    assert r.state == AlarmState.STEADY
+    assert r.reason == "refill_finished"
+
+
+def test_force_normal_immediately_sets_normal_without_touching_debouncer():
+    m = make_machine()
+    m.update(True, False, False, now=0.0)
+    m.update(True, False, False, now=0.6)
+    assert m.state == AlarmState.STEADY
+
+    r = m.force_normal(reason="reset")
+    assert r.state == AlarmState.NORMAL
+    assert r.output_on is False
+    assert r.transitioned is True
+    assert r.reason == "reset"
+
+    # デバウンサの内部タイマーは維持されているため、rawがTrueのままなら
+    # 次のupdate呼び出しで即座にSTEADYへ戻る（on_delayを待たない）。
+    r = m.update(True, False, False, now=0.61)
+    assert r.state == AlarmState.STEADY
+
+
+def test_force_normal_is_no_op_transition_when_already_normal():
+    m = make_machine()
+    r = m.force_normal(reason="reset")
+    assert r.transitioned is False
+    assert r.state == AlarmState.NORMAL

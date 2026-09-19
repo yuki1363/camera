@@ -49,6 +49,10 @@ class OpenCvCameraConfig:
     height: int = 720
     fourcc: Optional[str] = "MJPG"
 
+    def validate(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ConfigError("camera.opencv.width/height は正の値である必要があります")
+
 
 @dataclass(frozen=True)
 class Picamera2CameraConfig:
@@ -56,6 +60,10 @@ class Picamera2CameraConfig:
     height: int = 720
     auto_exposure: bool = False
     auto_white_balance: bool = False
+
+    def validate(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ConfigError("camera.picamera2.width/height は正の値である必要があります")
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,8 @@ class CameraConfig:
     def validate(self) -> None:
         if self.backend not in ("opencv", "picamera2"):
             raise ConfigError(f"camera.backend は 'opencv' か 'picamera2' である必要があります: {self.backend!r}")
+        self.opencv.validate()
+        self.picamera2.validate()
 
 
 @dataclass(frozen=True)
@@ -136,6 +146,8 @@ class BaselineDiffConfig:
             raise ConfigError("detection.baseline_diff.blur_kernel は正の奇数である必要があります")
         if not (0.0 < self.density_threshold < 1.0):
             raise ConfigError("detection.baseline_diff.density_threshold は0〜1の範囲で指定してください")
+        if self.canny_low < 0 or self.canny_high <= self.canny_low:
+            raise ConfigError("detection.baseline_diff.canny_low/canny_high の指定が不正です")
 
 
 @dataclass(frozen=True)
@@ -219,7 +231,7 @@ class GpioInputConfig:
 class GpioConfig:
     pin_factory: str = "lgpio"
     alarm_output: GpioOutputConfig = field(default_factory=lambda: GpioOutputConfig(pin=17))
-    reset_button: GpioInputConfig = field(default_factory=lambda: GpioInputConfig(pin=27))
+    reset_button: GpioInputConfig = field(default_factory=lambda: GpioInputConfig(pin=27, bounce_time_ms=200))
     plc_reset_input: GpioInputConfig = field(default_factory=lambda: GpioInputConfig(pin=22, bounce_time_ms=50))
     fault_output: Optional[GpioOutputConfig] = None
 
@@ -294,6 +306,8 @@ class WebConfig:
     def validate(self) -> None:
         if not (1 <= self.port <= 65535):
             raise ConfigError("web.port は1〜65535の範囲で指定してください")
+        if self.stream_width <= 0 or self.stream_height <= 0:
+            raise ConfigError("web.stream_width/stream_height は正の値である必要があります")
         if self.stream_fps <= 0:
             raise ConfigError("web.stream_fps は正の値である必要があります")
         if not (1 <= self.jpeg_quality <= 100):
@@ -341,6 +355,14 @@ def _roi_from_dict(d: dict, path: str) -> RoiConfig:
     )
 
 
+def _resolve_path(value: str, base_dir: Path) -> str:
+    """相対パスは設定ファイルのあるディレクトリ基準で解決する（CWD依存を避けるため）。"""
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((base_dir / candidate).resolve())
+
+
 def load_config(path: str | Path) -> AppConfig:
     path = Path(path)
     if not path.is_file():
@@ -354,7 +376,7 @@ def load_config(path: str | Path) -> AppConfig:
         raise ConfigError("設定ファイルのトップレベルはマッピング(dict)である必要があります")
 
     try:
-        config = _build_config(raw)
+        config = _build_config(raw, base_dir=path.resolve().parent)
     except ConfigError:
         raise
     except (TypeError, ValueError, KeyError) as exc:
@@ -364,7 +386,7 @@ def load_config(path: str | Path) -> AppConfig:
     return config
 
 
-def _build_config(raw: dict) -> AppConfig:
+def _build_config(raw: dict, base_dir: Path) -> AppConfig:
     camera_raw = _as_dict(raw.get("camera", {}), "camera")
     opencv_raw = _as_dict(camera_raw.get("opencv", {}), "camera.opencv")
     picamera2_raw = _as_dict(camera_raw.get("picamera2", {}), "camera.picamera2")
@@ -411,7 +433,9 @@ def _build_config(raw: dict) -> AppConfig:
         canny_high=int(bd_raw.get("canny_high", 150)),
         blur_kernel=int(bd_raw.get("blur_kernel", 5)),
         density_threshold=float(bd_raw.get("density_threshold", 0.05)),
-        reference_path=bd_raw.get("reference_path", "config/baseline_reference.npy"),
+        reference_path=_resolve_path(
+            bd_raw.get("reference_path", "config/baseline_reference.npy"), base_dir
+        ),
     )
 
     debounce_raw = _as_dict(detection_raw.get("debounce", {}), "detection.debounce")
@@ -425,7 +449,9 @@ def _build_config(raw: dict) -> AppConfig:
         enabled=bool(ac_raw.get("enabled", True)),
         roi=_roi_from_dict(ac_raw.get("roi", {"x": 0.02, "y": 0.02, "w": 0.15, "h": 0.15}), "detection.alignment_check.roi"),
         correlation_threshold=float(ac_raw.get("correlation_threshold", 0.6)),
-        reference_path=ac_raw.get("reference_path", "config/alignment_reference.npy"),
+        reference_path=_resolve_path(
+            ac_raw.get("reference_path", "config/alignment_reference.npy"), base_dir
+        ),
     )
 
     rd_raw = _as_dict(detection_raw.get("refill_detection", {}), "detection.refill_detection")

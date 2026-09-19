@@ -202,6 +202,7 @@ def main(argv=None) -> int:
                     fallback_detector = make_fallback_detector(roi, ed_cfg)
                     raw["detection"]["roi"] = {"x": roi.x, "y": roi.y, "w": roi.w, "h": roi.h}
                     print(f"ROIを更新しました: x={roi.x:.3f} y={roi.y:.3f} w={roi.w:.3f} h={roi.h:.3f}")
+                    print("ROIサイズが変わったため基準画像は破棄されました。bキーで基準フレームを再取得してください。")
 
             elif key == ord("b"):
                 print(f"基準フレームを{bd_cfg.num_calibration_frames}枚撮影します。キャップ満杯状態にしてください...")

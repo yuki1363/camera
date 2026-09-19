@@ -51,6 +51,8 @@ class App:
         self._running = False
         self._consecutive_camera_failures = 0
         self._backoff_s = config.app.camera_retry.initial_backoff_s
+        self._detection_error_active = False
+        self._last_detection_error_log_at = 0.0
 
     def run(self, install_signal_handlers: bool = True) -> None:
         self._lock.acquire()
@@ -92,23 +94,33 @@ class App:
         self._running = False
 
     def _process_frame(self, frame: np.ndarray) -> None:
+        now = time.monotonic()
+        reset_requested = self.gpio.reset_button.is_active or self.gpio.plc_reset_input.is_active
+
         if self.alignment_checker is not None and self.alignment_checker.is_ready:
             alignment = self.alignment_checker.check(frame)
             if not alignment.ok:
                 log_event(
                     logger, logging.WARNING, "camera_misalignment_detected", correlation=f"{alignment.correlation:.3f}"
                 )
+                self._apply_reset_only(reset_requested, now)
                 return
 
-        detection_result = self.detector.detect(frame)
+        try:
+            detection_result = self.detector.detect(frame)
+        except RuntimeError as exc:
+            self._log_detection_error(str(exc))
+            self._apply_reset_only(reset_requested, now)
+            return
+        self._clear_detection_error()
+
         motion_result = self.motion_detector.detect(frame) if self.motion_detector is not None else _NO_MOTION
 
-        reset_requested = self.gpio.reset_button.is_active or self.gpio.plc_reset_input.is_active
         result = self.state_machine.update(
             raw_line_visible=detection_result.line_visible,
             motion_detected=motion_result.motion_detected,
             reset_requested=reset_requested,
-            now=time.monotonic(),
+            now=now,
         )
         self.gpio.alarm_output.set(result.output_on)
 
@@ -125,6 +137,33 @@ class App:
 
         if self.frame_buffer is not None:
             self._update_web_frame(frame, result.state.value, result.reason)
+
+    def _apply_reset_only(self, reset_requested: bool, now: float) -> None:
+        """検知結果を信用できないフレーム（位置ズレ・検知エラー）でも、リセットだけは
+        常に独立して効かせる。デバウンサには触れずNORMALへ即座に強制する。"""
+        if not reset_requested:
+            return
+        result = self.state_machine.force_normal(reason="reset")
+        self.gpio.alarm_output.set(result.output_on)
+        if result.transitioned:
+            log_event(
+                logger, logging.INFO, "alarm_state_changed", state=result.state.value, reason=result.reason
+            )
+
+    def _log_detection_error(self, message: str) -> None:
+        now = time.monotonic()
+        if not self._detection_error_active:
+            log_event(logger, logging.ERROR, "detection_error", message=message)
+            self._detection_error_active = True
+            self._last_detection_error_log_at = now
+        elif now - self._last_detection_error_log_at >= 30.0:
+            log_event(logger, logging.ERROR, "detection_error_persisting", message=message)
+            self._last_detection_error_log_at = now
+
+    def _clear_detection_error(self) -> None:
+        if self._detection_error_active:
+            log_event(logger, logging.INFO, "detection_error_cleared")
+            self._detection_error_active = False
 
     def _update_web_frame(self, frame: np.ndarray, state: str, reason: str) -> None:
         web_cfg = self.config.web

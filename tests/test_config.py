@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from capper_monitor.config import ConfigError, load_config
+from capper_monitor.config import ConfigError, GpioConfig, load_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "config.yaml"
@@ -73,3 +73,54 @@ def test_malformed_yaml_raises(tmp_path):
     path.write_text("camera: [this is not: valid\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_baseline_diff_invalid_canny_range_raises(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "detection:\n  baseline_diff:\n    canny_low: 150\n    canny_high: 50\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_negative_camera_dimensions_raise(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("camera:\n  opencv:\n    width: 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_negative_web_stream_dimensions_raise(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("web:\n  stream_width: -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_reset_button_default_bounce_time_matches_yaml_default(tmp_path):
+    # dataclassを直接構築した場合とYAML読み込み(値未指定)の場合とでデフォルト値が
+    # 食い違わないことを確認する回帰テスト。
+    path = tmp_path / "config.yaml"
+    path.write_text("gpio:\n  reset_button:\n    pin: 27\n", encoding="utf-8")
+    loaded = load_config(path)
+    assert loaded.gpio.reset_button.bounce_time_ms == GpioConfig().reset_button.bounce_time_ms
+
+
+def test_reference_path_resolved_relative_to_config_file_not_cwd(tmp_path, monkeypatch):
+    subdir = tmp_path / "site_a"
+    subdir.mkdir()
+    path = subdir / "config.yaml"
+    path.write_text(
+        "detection:\n"
+        "  baseline_diff:\n"
+        "    reference_path: baseline_reference.npy\n",
+        encoding="utf-8",
+    )
+    other_cwd = tmp_path / "somewhere_else"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+
+    config = load_config(path)
+    assert config.detection.baseline_diff.reference_path == str(subdir / "baseline_reference.npy")

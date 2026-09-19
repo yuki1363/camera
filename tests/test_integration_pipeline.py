@@ -8,10 +8,23 @@ import pytest
 from capper_monitor.app import App
 from capper_monitor.camera.base import CameraBackend
 from capper_monitor.config import load_config
+from capper_monitor.detection.alignment_check import AlignmentCheckResult
 from capper_monitor.detection.roi import RoiFractional
 from tests.helpers import draw_line_in_roi, make_frame
 
 INTEGRATION_ROI = RoiFractional(0.3, 0.4, 0.4, 0.2)
+
+
+class AlwaysFailingAlignmentChecker:
+    is_ready = True
+
+    def check(self, frame):
+        return AlignmentCheckResult(ok=False, correlation=0.0)
+
+
+class RaisingDetector:
+    def detect(self, frame):
+        raise RuntimeError("ROIサイズが基準画像と一致しません（テスト用）")
 
 INTEGRATION_CONFIG_YAML = """
 camera:
@@ -146,3 +159,66 @@ def test_run_shuts_down_safely_on_stop_signal(integration_config, mock_pin_facto
     assert fake_camera.opened is True
     assert fake_camera.closed is True
     assert alarm_pin.state == 0
+
+
+def test_reset_clears_output_even_when_alignment_check_fails(integration_config, mock_pin_factory):
+    app = App(integration_config, gpio_pin_factory=mock_pin_factory)
+    try:
+        with_line = draw_line_in_roi(make_frame(), INTEGRATION_ROI, thickness=6)
+        app._process_frame(with_line)
+        assert app.gpio.alarm_output.is_on is True
+
+        app.alignment_checker = AlwaysFailingAlignmentChecker()
+        reset_pin = mock_pin_factory.pin(integration_config.gpio.reset_button.pin)
+        reset_pin.drive_low()
+
+        app._process_frame(make_frame())
+        assert app.gpio.alarm_output.is_on is False
+    finally:
+        app.gpio.close()
+
+
+def test_alignment_failure_without_reset_holds_last_state(integration_config):
+    app = App(integration_config)
+    try:
+        with_line = draw_line_in_roi(make_frame(), INTEGRATION_ROI, thickness=6)
+        app._process_frame(with_line)
+        assert app.gpio.alarm_output.is_on is True
+
+        app.alignment_checker = AlwaysFailingAlignmentChecker()
+        app._process_frame(make_frame())
+        assert app.gpio.alarm_output.is_on is True
+    finally:
+        app.gpio.close()
+
+
+def test_detection_error_is_caught_and_does_not_crash(integration_config):
+    app = App(integration_config)
+    try:
+        with_line = draw_line_in_roi(make_frame(), INTEGRATION_ROI, thickness=6)
+        app._process_frame(with_line)
+        assert app.gpio.alarm_output.is_on is True
+
+        app.detector = RaisingDetector()
+        app._process_frame(make_frame())  # 例外を送出せず、前回の出力値を保持すること
+        assert app.gpio.alarm_output.is_on is True
+        assert app._detection_error_active is True
+    finally:
+        app.gpio.close()
+
+
+def test_reset_clears_output_even_when_detection_raises(integration_config, mock_pin_factory):
+    app = App(integration_config, gpio_pin_factory=mock_pin_factory)
+    try:
+        with_line = draw_line_in_roi(make_frame(), INTEGRATION_ROI, thickness=6)
+        app._process_frame(with_line)
+        assert app.gpio.alarm_output.is_on is True
+
+        app.detector = RaisingDetector()
+        reset_pin = mock_pin_factory.pin(integration_config.gpio.reset_button.pin)
+        reset_pin.drive_low()
+
+        app._process_frame(make_frame())
+        assert app.gpio.alarm_output.is_on is False
+    finally:
+        app.gpio.close()
