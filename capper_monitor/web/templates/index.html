@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>キャッパーボックス監視</title>
+<style>
+  body { font-family: sans-serif; background: #111; color: #eee; text-align: center; margin: 0; padding: 16px; }
+  img { max-width: 100%; border: 2px solid #444; border-radius: 4px; }
+  #status { display: inline-block; margin-top: 12px; padding: 10px 20px; border-radius: 20px; font-weight: bold; font-size: 1.2em; }
+  .state-normal { background: #2e7d32; color: #fff; }
+  .state-steady { background: #f9a825; color: #000; }
+  .state-blink { background: #f9a825; color: #000; animation: blink 0.8s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  #reason { margin-top: 8px; color: #aaa; font-size: 0.9em; }
+</style>
+</head>
+<body>
+  <h1>キャッパーボックス監視</h1>
+  <img src="/stream.mjpg" alt="live camera">
+  <div id="status" class="state-normal">NORMAL</div>
+  <div id="reason"></div>
+<script>
+async function pollStatus() {
+  try {
+    const res = await fetch('/status', { cache: 'no-store' });
+    const data = await res.json();
+    const el = document.getElementById('status');
+    el.textContent = data.state.toUpperCase();
+    el.className = 'state-' + data.state;
+    document.getElementById('reason').textContent = 'reason: ' + data.reason;
+  } catch (e) {
+    // ネットワーク瞬断等は無視して次のポーリングで回復させる
+  }
+}
+setInterval(pollStatus, 1000);
+pollStatus();
+</script>
+</body>
+</html>

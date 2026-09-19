@@ -1,0 +1,7 @@
+numpy>=1.26,<2.0
+opencv-python-headless>=4.9,<5.0
+PyYAML>=6.0,<7.0
+gpiozero>=2.0,<3.0
+lgpio>=0.2.2.0
+ruamel.yaml>=0.18,<0.19
+Flask>=3.0,<4.0

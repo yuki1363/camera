@@ -1,0 +1,18 @@
+[Unit]
+Description=Capper Box Line Detection Monitor
+After=multi-user.target network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart=/opt/capper-monitor/.venv/bin/python -m capper_monitor --config /etc/capper-monitor/config.yaml
+WorkingDirectory=/opt/capper-monitor
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+SupplementaryGroups=gpio video
+
+[Install]
+WantedBy=multi-user.target
