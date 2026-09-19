@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>カメラ</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <h1>カメラ</h1>
+      <p class="subtitle">ブラウザだけで撮影・保存できるシンプルなカメラアプリ</p>
+    </header>
+
+    <main class="layout">
+      <section class="stage" aria-label="プレビュー">
+        <div class="viewport" id="viewport">
+          <video id="preview" playsinline autoplay muted></video>
+          <div class="flash" id="flash" aria-hidden="true"></div>
+          <p class="placeholder" id="placeholder">「カメラを開始」を押してください</p>
+        </div>
+
+        <p class="status" id="status" role="status" aria-live="polite"></p>
+
+        <div class="controls">
+          <button id="startBtn" type="button" class="primary">カメラを開始</button>
+          <button id="shutterBtn" type="button" class="shutter" disabled>
+            撮影<span class="hint">Space</span>
+          </button>
+          <button id="switchBtn" type="button" disabled>カメラ切替</button>
+          <button id="stopBtn" type="button" disabled>停止</button>
+        </div>
+
+        <div class="settings">
+          <label>
+            カメラ
+            <select id="deviceSelect" disabled>
+              <option value="">自動選択</option>
+            </select>
+          </label>
+          <label>
+            解像度
+            <select id="resolutionSelect">
+              <option value="640x480">640 × 480</option>
+              <option value="1280x720" selected>1280 × 720</option>
+              <option value="1920x1080">1920 × 1080</option>
+            </select>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="mirrorToggle" checked />
+            左右反転して表示
+          </label>
+        </div>
+      </section>
+
+      <section class="gallery-panel" aria-label="撮影した写真">
+        <div class="gallery-head">
+          <h2>撮影した写真<span id="photoCount" class="count">0 枚</span></h2>
+          <button id="clearBtn" type="button" class="ghost" disabled>すべて削除</button>
+        </div>
+        <ul class="gallery" id="gallery"></ul>
+        <p class="empty" id="galleryEmpty">まだ写真がありません。</p>
+      </section>
+    </main>
+
+    <canvas id="canvas" hidden></canvas>
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>
