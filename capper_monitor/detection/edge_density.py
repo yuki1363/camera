@@ -21,6 +21,8 @@ def _auto_canny_thresholds(gray: np.ndarray) -> tuple:
 class EdgeDensityDetector(DetectionStrategy):
     """Cannyエッジ密度の閾値方式。汎用的だが照明変化・背景の固定模様に弱いためフォールバック用。"""
 
+    strategy_name = "edge_density"
+
     def __init__(
         self,
         roi: RoiFractional,
@@ -36,6 +38,14 @@ class EdgeDensityDetector(DetectionStrategy):
         self._blur_kernel = blur_kernel
         self._density_threshold = density_threshold
         self._adaptive = adaptive
+
+    @property
+    def threshold(self) -> float:
+        return self._density_threshold
+
+    @threshold.setter
+    def threshold(self, value: float) -> None:
+        self._density_threshold = value
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         roi_img = self._roi.crop(frame)

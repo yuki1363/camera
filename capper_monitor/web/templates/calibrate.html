@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>キャッパー監視 調整</title>
+<style>
+  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; padding: 12px; }
+  h1 { font-size: 1.2em; margin: 4px 0 10px; }
+  a { color: #8cf; }
+  .view { position: relative; width: 100%; max-width: 720px; margin: 0 auto; }
+  .view img { display: block; width: 100%; border: 2px solid #444; border-radius: 4px; }
+  .view canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; touch-action: none; }
+  .panel { max-width: 720px; margin: 10px auto; }
+  #status { display: inline-block; padding: 6px 16px; border-radius: 16px; font-weight: bold; }
+  .state-normal { background: #2e7d32; color: #fff; }
+  .state-steady { background: #f9a825; color: #000; }
+  .state-blink { background: #f9a825; color: #000; animation: blink 0.8s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  .info { font-size: 0.9em; line-height: 1.7; color: #ccc; margin-top: 6px; }
+  .info b { color: #fff; }
+  .step { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 10px; margin: 8px 0; }
+  .step p { margin: 0 0 8px; font-size: 0.9em; color: #bbb; }
+  button { width: 100%; min-height: 46px; font-size: 1em; border: none; border-radius: 6px;
+           background: #1565c0; color: #fff; }
+  button:disabled { background: #444; color: #888; }
+  button.save { background: #2e7d32; }
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; min-height: 42px; font-size: 1em; padding: 0 8px; border-radius: 6px; border: 1px solid #555;
+               background: #222; color: #fff; }
+  .row button { width: auto; padding: 0 16px; }
+  #message { min-height: 1.5em; margin: 8px 0; padding: 8px; border-radius: 6px; background: #222; }
+  #message.error { background: #5a1d1d; }
+  .notice { background: #5a1d1d; padding: 10px; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <h1>キャッパー監視 調整 <a href="/" style="font-size:0.7em">監視画面へ</a></h1>
+
+  <div class="view">
+    <img id="stream" src="/stream.mjpg" alt="live camera">
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="panel">
+    <div><span id="status" class="state-normal">---</span></div>
+    <div class="info" id="info">読み込み中...</div>
+    <div id="message"></div>
+
+    {% if not calibration_enabled %}
+    <div class="notice">調整機能は無効です（config.yaml の web.calibration_enabled が false）。</div>
+    {% endif %}
+
+    <div class="step">
+      <p>① 映像の上を指でなぞって、ラインが出てくる範囲を四角で囲む（水色の枠が現在のROI）</p>
+      <button id="btn-roi" disabled>選んだ範囲をROIにする</button>
+    </div>
+    <div class="step">
+      <p>② キャップを満杯にして（ラインが隠れた状態で）押す</p>
+      <button id="btn-baseline">基準フレーム撮影</button>
+    </div>
+    <div class="step">
+      <p>③ 位置ズレ検知の基準を撮る（紫の枠の中は、いつも動かない場所にしておく）</p>
+      <button id="btn-alignment">位置ズレ基準を撮影</button>
+    </div>
+    <div class="step">
+      <p>④ キャップを出し入れして状態が切り替わるか確認。切り替わらない場合は、満杯時とライン露出時のスコアの間の値をしきい値にする</p>
+      <div class="row">
+        <input id="threshold" type="number" step="0.001" min="0.001" max="0.999" inputmode="decimal">
+        <button id="btn-threshold">しきい値を適用</button>
+      </div>
+    </div>
+    <div class="step">
+      <p>⑤ 問題なければ保存（再起動後もこの設定で動きます）</p>
+      <button id="btn-save" class="save">保存</button>
+    </div>
+  </div>
+
+<script>
+const CALIBRATION_ENABLED = {{ 'true' if calibration_enabled else 'false' }};
+const STATE_LABELS = { normal: '正常', steady: 'キャップ減少', blink: '補充中' };
+const DETECTOR_LABELS = { baseline_diff: '基準差分', edge_density: 'エッジ密度', color_mask: '色マスク' };
+const REASON_LABELS = {
+  startup: '起動直後', line_detected: 'ライン検知', line_cleared: 'ライン消失', reset: 'リセット',
+  refill_in_progress: '補充中', refill_finished: '補充終了', camera_misalignment: 'カメラ位置ズレ（基準と不一致）',
+  detection_error: '検知エラー（ROIと基準フレームが不一致。基準を撮り直してください）',
+};
+
+const img = document.getElementById('stream');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+const thresholdInput = document.getElementById('threshold');
+const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save']
+  .map(id => document.getElementById(id));
+
+let drag = null;
+let selection = null;
+let busy = false;
+let thresholdEdited = false;
+
+function clamp(v) { return Math.min(1, Math.max(0, v)); }
+
+function resizeCanvas() {
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+  draw();
+}
+new ResizeObserver(resizeCanvas).observe(img);
+
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) };
+}
+
+function toRect(a, b) {
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const rect = drag ? toRect(drag.start, drag.end) : selection;
+  if (!rect) return;
+  ctx.strokeStyle = '#ffeb3b';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([8, 6]);
+  ctx.strokeRect(rect.x * canvas.width, rect.y * canvas.height, rect.w * canvas.width, rect.h * canvas.height);
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (!CALIBRATION_ENABLED) return;
+  canvas.setPointerCapture(e.pointerId);
+  const p = pointerPos(e);
+  drag = { start: p, end: p };
+  draw();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  drag.end = pointerPos(e);
+  draw();
+});
+canvas.addEventListener('pointerup', e => {
+  if (!drag) return;
+  drag.end = pointerPos(e);
+  const rect = toRect(drag.start, drag.end);
+  drag = null;
+  selection = (rect.w >= 0.02 && rect.h >= 0.02) ? rect : null;
+  draw();
+  updateButtons();
+});
+
+function updateButtons() {
+  buttons.forEach(b => { b.disabled = busy || !CALIBRATION_ENABLED; });
+  document.getElementById('btn-roi').disabled = busy || !CALIBRATION_ENABLED || !selection;
+}
+
+function showMessage(text, isError) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = isError ? 'error' : '';
+}
+
+async function post(path, body) {
+  busy = true;
+  updateButtons();
+  showMessage('処理中...', false);
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    showMessage(data.ok ? data.message : 'エラー: ' + data.error, !data.ok);
+    return data.ok;
+  } catch (e) {
+    showMessage('通信エラー: ' + e, true);
+    return false;
+  } finally {
+    busy = false;
+    updateButtons();
+  }
+}
+
+document.getElementById('btn-roi').addEventListener('click', async () => {
+  if (selection && await post('/api/roi', selection)) {
+    selection = null;
+    draw();
+  }
+});
+document.getElementById('btn-baseline').addEventListener('click', () => post('/api/baseline'));
+document.getElementById('btn-alignment').addEventListener('click', () => post('/api/alignment'));
+document.getElementById('btn-save').addEventListener('click', () => post('/api/save'));
+document.getElementById('btn-threshold').addEventListener('click', async () => {
+  if (await post('/api/threshold', { value: parseFloat(thresholdInput.value) })) {
+    thresholdEdited = false;
+  }
+});
+thresholdInput.addEventListener('input', () => { thresholdEdited = true; });
+
+function fmt(v, digits) { return (v === null || v === undefined) ? '---' : Number(v).toFixed(digits); }
+function esc(t) {
+  return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch('/status', { cache: 'no-store' });
+    const s = await res.json();
+    const badge = document.getElementById('status');
+    badge.textContent = STATE_LABELS[s.state] || s.state || '---';
+    badge.className = 'state-' + (s.state || 'normal');
+
+    const lines = [
+      '検知方式: <b>' + esc(DETECTOR_LABELS[s.detector] || s.detector || '---') + '</b>',
+      'スコア: <b>' + fmt(s.score, 4) + '</b> / しきい値: <b>' + fmt(s.threshold, 4) + '</b>（スコア≧しきい値でライン検知）',
+    ];
+    if (s.configured_strategy === 'baseline_diff') {
+      lines.push('基準フレーム: <b>' + (s.baseline_ready ? '撮影済み' : '未撮影（エッジ密度で代用中）') + '</b>');
+    }
+    lines.push('位置ズレ基準: <b>' + (s.alignment_ready ? '撮影済み（一致度 ' + fmt(s.alignment_correlation, 2) + '）' : '未撮影') + '</b>');
+    if (s.reason) lines.push('状況: ' + esc(REASON_LABELS[s.reason] || s.reason));
+    document.getElementById('info').innerHTML = lines.join('<br>');
+
+    if (!thresholdEdited && document.activeElement !== thresholdInput && s.threshold !== null && s.threshold !== undefined) {
+      thresholdInput.value = Number(s.threshold).toFixed(4);
+    }
+  } catch (e) {
+    // 瞬断は次のポーリングで回復させる
+  }
+}
+
+updateButtons();
+setInterval(pollStatus, 1000);
+pollStatus();
+</script>
+</body>
+</html>

@@ -15,8 +15,21 @@ class DetectionResult:
 
 
 class DetectionStrategy(ABC):
+    strategy_name: str = ""
+
     @abstractmethod
     def detect(self, frame: np.ndarray) -> DetectionResult:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def threshold(self) -> float:
+        """line_visible 判定に使うしきい値（scoreがこの値以上で検知）。"""
+        raise NotImplementedError
+
+    @threshold.setter
+    @abstractmethod
+    def threshold(self, value: float) -> None:
         raise NotImplementedError
 
     @property

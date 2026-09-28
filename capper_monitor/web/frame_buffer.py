@@ -24,9 +24,9 @@ class FrameBuffer:
         with self._lock:
             return self._jpeg_bytes
 
-    def update_status(self, state: str, reason: str, timestamp: Optional[float]) -> None:
+    def update_status(self, **fields) -> None:
         with self._lock:
-            self._status = {"state": state, "reason": reason, "timestamp": timestamp}
+            self._status = dict(fields)
 
     def get_status(self) -> dict:
         with self._lock:

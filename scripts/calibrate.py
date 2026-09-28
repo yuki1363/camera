@@ -24,6 +24,7 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from capper_monitor.calibration import save_calibration
 from capper_monitor.camera.factory import create_camera
 from capper_monitor.config import load_config
 from capper_monitor.detection.alignment_check import AlignmentChecker
@@ -48,21 +49,6 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="config/config.yaml", help="設定ファイルのパス")
     return parser.parse_args(argv)
-
-
-def load_yaml_roundtrip(path: Path):
-    from ruamel.yaml import YAML
-
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.load(f)
-    return yaml, data
-
-
-def save_yaml_roundtrip(yaml, data, path: Path) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        yaml.dump(data, f)
 
 
 def make_baseline_detector(roi: RoiFractional, bd_cfg, reference_edges=None) -> BaselineDiffDetector:
@@ -92,7 +78,6 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     config_path = Path(args.config)
     config = load_config(config_path)
-    yaml, raw = load_yaml_roundtrip(config_path)
 
     camera = create_camera(config.camera)
     camera.open()
@@ -200,7 +185,6 @@ def main(argv=None) -> int:
                     roi = RoiFractional(x / width, y / height, w / width, h / height)
                     baseline_detector = make_baseline_detector(roi, bd_cfg)
                     fallback_detector = make_fallback_detector(roi, ed_cfg)
-                    raw["detection"]["roi"] = {"x": roi.x, "y": roi.y, "w": roi.w, "h": roi.h}
                     print(f"ROIを更新しました: x={roi.x:.3f} y={roi.y:.3f} w={roi.w:.3f} h={roi.h:.3f}")
                     print("ROIサイズが変わったため基準画像は破棄されました。bキーで基準フレームを再取得してください。")
 
@@ -231,7 +215,7 @@ def main(argv=None) -> int:
                 if alignment_checker.is_ready:
                     alignment_checker.save_reference(ac_cfg.reference_path)
                     print(f"位置ズレ基準画像を保存しました: {ac_cfg.reference_path}")
-                save_yaml_roundtrip(yaml, raw, config_path)
+                save_calibration(config_path, roi=roi)
                 print(f"設定を保存しました: {config_path}")
     finally:
         camera.close()

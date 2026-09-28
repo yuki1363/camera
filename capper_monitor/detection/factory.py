@@ -19,7 +19,7 @@ def _roi(cfg) -> RoiFractional:
     return RoiFractional(x=cfg.x, y=cfg.y, w=cfg.w, h=cfg.h)
 
 
-def create_strategy(name: str, cfg: DetectionConfig) -> DetectionStrategy:
+def create_strategy(name: str, cfg: DetectionConfig, load_reference: bool = True) -> DetectionStrategy:
     roi = _roi(cfg.roi)
     if name == "edge_density":
         c = cfg.edge_density
@@ -41,7 +41,7 @@ def create_strategy(name: str, cfg: DetectionConfig) -> DetectionStrategy:
         )
     if name == "baseline_diff":
         c = cfg.baseline_diff
-        reference = BaselineDiffDetector.load_reference(c.reference_path)
+        reference = BaselineDiffDetector.load_reference(c.reference_path) if load_reference else None
         return BaselineDiffDetector(
             roi=roi,
             dilate_kernel=c.dilate_kernel,
@@ -54,9 +54,13 @@ def create_strategy(name: str, cfg: DetectionConfig) -> DetectionStrategy:
     raise ValueError(f"未知の検知方式です: {name!r}")
 
 
-def create_detector(cfg: DetectionConfig) -> DetectionStrategy:
-    """主方式を生成する。baseline_diffで基準画像が未取得の場合はfallback_strategyを返す。"""
-    primary = create_strategy(cfg.strategy, cfg)
+def create_detector(cfg: DetectionConfig, load_reference: bool = True) -> DetectionStrategy:
+    """主方式を生成する。baseline_diffで基準画像が未取得の場合はfallback_strategyを返す。
+
+    load_reference=False はROI変更直後など、保存済みの基準画像が新しいROIと
+    合わなくなった場合に使う。
+    """
+    primary = create_strategy(cfg.strategy, cfg, load_reference)
     if primary.is_ready:
         return primary
     logger.warning(
@@ -64,7 +68,7 @@ def create_detector(cfg: DetectionConfig) -> DetectionStrategy:
         cfg.strategy,
         cfg.fallback_strategy,
     )
-    return create_strategy(cfg.fallback_strategy, cfg)
+    return create_strategy(cfg.fallback_strategy, cfg, load_reference)
 
 
 def create_alignment_checker(cfg: DetectionConfig) -> AlignmentChecker:

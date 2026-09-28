@@ -325,6 +325,7 @@ class WebConfig:
     stream_height: int = 360
     stream_fps: int = 8
     jpeg_quality: int = 70
+    calibration_enabled: bool = True
 
     def validate(self) -> None:
         if not (1 <= self.port <= 65535):
@@ -557,6 +558,7 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
         stream_height=int(web_raw.get("stream_height", 360)),
         stream_fps=int(web_raw.get("stream_fps", 8)),
         jpeg_quality=int(web_raw.get("jpeg_quality", 70)),
+        calibration_enabled=bool(web_raw.get("calibration_enabled", True)),
     )
 
     logging_raw = _as_dict(raw.get("logging", {}), "logging")

@@ -31,7 +31,7 @@ def main(argv=None) -> int:
         return 0
 
     setup_logging(config.logging)
-    app = App(config)
+    app = App(config, config_path=args.config)
     app.run()
     return 0
 

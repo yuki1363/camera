@@ -10,6 +10,8 @@ from .roi import RoiFractional
 class ColorMaskDetector(DetectionStrategy):
     """HSV色マスク方式。ラインの色が既知の場合の代替方式（既定では無効化推奨）。"""
 
+    strategy_name = "color_mask"
+
     def __init__(
         self,
         roi: RoiFractional,
@@ -21,6 +23,14 @@ class ColorMaskDetector(DetectionStrategy):
         self._hsv_lower = np.array(hsv_lower, dtype=np.uint8)
         self._hsv_upper = np.array(hsv_upper, dtype=np.uint8)
         self._pixel_ratio_threshold = pixel_ratio_threshold
+
+    @property
+    def threshold(self) -> float:
+        return self._pixel_ratio_threshold
+
+    @threshold.setter
+    def threshold(self, value: float) -> None:
+        self._pixel_ratio_threshold = value
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         roi_img = self._roi.crop(frame)

@@ -31,6 +31,8 @@ class BaselineDiffDetector(DetectionStrategy):
     差分を取り、稼働中の微振動・数ピクセルの画角ズレを吸収する。
     """
 
+    strategy_name = "baseline_diff"
+
     def __init__(
         self,
         roi: RoiFractional,
@@ -52,6 +54,14 @@ class BaselineDiffDetector(DetectionStrategy):
     @property
     def is_ready(self) -> bool:
         return self._reference_edges is not None
+
+    @property
+    def threshold(self) -> float:
+        return self._density_threshold
+
+    @threshold.setter
+    def threshold(self, value: float) -> None:
+        self._density_threshold = value
 
     def set_reference(self, reference_edges: np.ndarray) -> None:
         self._reference_edges = reference_edges
