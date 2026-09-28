@@ -94,6 +94,28 @@ sudo cp config/config.yaml /etc/capper-monitor/config.yaml
 sudo nano /etc/capper-monitor/config.yaml
 ```
 
+### Camera Module 3（オートフォーカス搭載）を使う場合の注意
+
+Raspberry Pi Camera Module 3 / 3 Wide（センサー`imx708`系）はオートフォーカス(AF)
+搭載です。稼働中に連続AFが働くと再フォーカス時に一瞬映像がぼやけ、`baseline_diff`
+方式の検知精度に影響しうるため、`config.yaml`の`camera.picamera2.autofocus_mode`で
+制御します。
+
+```yaml
+camera:
+  backend: picamera2
+  picamera2:
+    autofocus_mode: auto   # 既定値。起動時に1回だけAFを実行し、以後はその位置で固定
+```
+
+- `auto`（既定・推奨）: 起動時に自動でピントを合わせ、以後は固定します。手動でレンズ位置の数値を調べる必要はありません。
+- `manual`: 現場で最適なレンズ位置が分かっている場合、`lens_position`（ディオプター値）を直接指定して固定します。
+- `continuous`: 連続AFのまま動かします（**非推奨**。稼働中の再フォーカスでボケが発生し誤検知要因になりえます）。
+
+IMX219（Camera Module 2やFreenove互換カメラ等、AF非搭載センサー）では、この設定は
+自動的に無視されます（ログにINFOで記録されるだけで、エラーにはなりません）ので、
+同じ`config.yaml`のテンプレートをカメラ機種によらず使い回せます。
+
 設定を検証してから起動してください（`systemctl restart`前に必ず実行することを推奨）。
 
 ```bash
@@ -192,7 +214,9 @@ journalctl -u capper-monitor -f
 
 ## 現場確認チェックリスト（本開発環境では検証不可・実機必須）
 
-1. `picamera2`/libcamera の実挙動、CSIカメラの認識
+1. `picamera2`/libcamera の実挙動、CSIカメラの認識。Camera Module 3系では
+   `autofocus_mode: auto`（既定）で起動時にピントが合い、以後の稼働中に再フォーカス
+   （映像の一瞬のボケ）が発生しないことをログ・`scripts/calibrate.py`のプレビューで確認
 2. USBカメラのデバイス番号の安定性
 3. ラズパイ5実機での `/dev/gpiochip*` アクセス権限・lgpio動作
 4. **絶縁モジュールの結線・極性確認**: 出力側がPLCの24V入力回路を正しく開閉できること、

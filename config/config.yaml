@@ -21,6 +21,14 @@ camera:
     height: 720
     auto_exposure: false      # 基準差分方式の安定のため自動露出はOFF推奨
     auto_white_balance: false # 同上、自動ホワイトバランスもOFF推奨
+    # Camera Module 3系（オートフォーカス搭載）向けの設定。IMX219等AF非搭載の
+    # センサーでは自動的に無視される。
+    # "auto"（既定・推奨）: 起動時に1回だけAFを実行し、以後はその位置で固定する
+    # "manual": lens_positionで指定した位置に固定する（現場で最適値が分かっている場合）
+    # "continuous": 連続AFのまま動かす（非推奨。稼働中の再フォーカスで映像が
+    #               一瞬ボケ、baseline_diff方式の誤検知要因になりうる）
+    autofocus_mode: auto
+    # lens_position: 5.0   # autofocus_mode: manual のときのみ使用（ディオプター値）
 
 detection:
   # "baseline_diff" (推奨・既定): キャリブレーション時に撮影した「ラインが見えていない」

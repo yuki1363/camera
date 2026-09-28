@@ -60,10 +60,22 @@ class Picamera2CameraConfig:
     height: int = 720
     auto_exposure: bool = False
     auto_white_balance: bool = False
+    autofocus_mode: str = "auto"
+    lens_position: Optional[float] = None
 
     def validate(self) -> None:
         if self.width <= 0 or self.height <= 0:
             raise ConfigError("camera.picamera2.width/height は正の値である必要があります")
+        if self.autofocus_mode not in ("auto", "manual", "continuous"):
+            raise ConfigError(
+                "camera.picamera2.autofocus_mode は 'auto'/'manual'/'continuous' の"
+                f"いずれかである必要があります: {self.autofocus_mode!r}"
+            )
+        if self.autofocus_mode == "manual" and self.lens_position is None:
+            raise ConfigError(
+                "camera.picamera2.autofocus_mode が 'manual' の場合は"
+                "lens_position を指定してください"
+            )
 
 
 @dataclass(frozen=True)
@@ -403,6 +415,10 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
             height=int(picamera2_raw.get("height", 720)),
             auto_exposure=bool(picamera2_raw.get("auto_exposure", False)),
             auto_white_balance=bool(picamera2_raw.get("auto_white_balance", False)),
+            autofocus_mode=picamera2_raw.get("autofocus_mode", "auto"),
+            lens_position=(
+                float(picamera2_raw["lens_position"]) if "lens_position" in picamera2_raw else None
+            ),
         ),
     )
 

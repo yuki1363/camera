@@ -49,6 +49,39 @@ class Picamera2Backend(CameraBackend):
         if not self._config.auto_white_balance:
             self._cam.set_controls({"AwbEnable": False})
         self._cam.start()
+        self._apply_autofocus_settings()
+
+    def _apply_autofocus_settings(self) -> None:
+        """Camera Module 3系（オートフォーカス搭載）向けにAFを制御する。
+
+        既定の"auto"は起動時に1回だけオートフォーカスを実行して合焦させ、以後は
+        その位置で固定する（稼働中の再フォーカスによる一瞬のボケを防ぎ、
+        baseline_diff方式の安定性を保つため）。IMX219等AFハードウェアを持たない
+        センサーでは対象コントロールが存在せず例外になるため、ログに記録して
+        無視するだけで処理を継続する（クラッシュさせない）。
+        """
+        try:
+            from libcamera import controls
+        except ImportError:
+            logger.warning("libcamera.controls をimportできないため、AF制御をスキップします")
+            return
+
+        mode = self._config.autofocus_mode
+        try:
+            if mode == "manual":
+                self._cam.set_controls(
+                    {"AfMode": controls.AfModeEnum.Manual, "LensPosition": self._config.lens_position}
+                )
+            elif mode == "auto":
+                self._cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
+                self._cam.autofocus_cycle()
+            elif mode == "continuous":
+                self._cam.set_controls({"AfMode": controls.AfModeEnum.Continuous})
+        except RuntimeError:
+            logger.info(
+                "このカメラはオートフォーカス制御に対応していません"
+                "（固定焦点センサーの可能性があります）。AF設定を無視して続行します。"
+            )
 
     def read(self) -> Optional[np.ndarray]:
         if self._cam is None:
