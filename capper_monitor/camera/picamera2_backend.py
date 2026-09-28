@@ -13,6 +13,16 @@ from .base import CameraBackend
 
 logger = logging.getLogger(__name__)
 
+_AWB_MODE_ENUM_NAMES = {
+    "auto": "Auto",
+    "tungsten": "Tungsten",
+    "fluorescent": "Fluorescent",
+    "indoor": "Indoor",
+    "daylight": "Daylight",
+    "cloudy": "Cloudy",
+    "custom": "Custom",
+}
+
 
 def _import_picamera2():
     try:
@@ -46,8 +56,32 @@ class Picamera2Backend(CameraBackend):
         )
         self._cam.configure(video_config)
         self._cam.start()
+        self._apply_awb_mode()
         self._converge_and_lock_ae_awb()
         self._apply_autofocus_settings()
+
+    def _apply_awb_mode(self) -> None:
+        """AWBのアルゴリズムモード（Auto/Daylight/Tungsten等）を設定する。
+
+        汎用の"Auto"（グレーワールド系アルゴリズム）は、シーン内の色が偏っている
+        場合（今回の実機検証では黄色みが残った）に補正を誤ることがあるため、
+        現場の照明種別に合わせたプリセットを明示的に指定できるようにする。
+        """
+        try:
+            from libcamera import controls
+        except ImportError:
+            logger.warning("libcamera.controls をimportできないため、AWBモード設定をスキップします")
+            return
+
+        enum_name = _AWB_MODE_ENUM_NAMES.get(self._config.awb_mode)
+        if enum_name is None:
+            return
+        try:
+            self._cam.set_controls({"AwbMode": getattr(controls.AwbModeEnum, enum_name)})
+        except RuntimeError:
+            logger.info(
+                "このカメラはAWBモード指定に対応していません。設定を無視して続行します。"
+            )
 
     def _converge_and_lock_ae_awb(self) -> None:
         """AE/AWBを「OFFにした瞬間の値」で固定するのではなく、起動直後に一定時間

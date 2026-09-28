@@ -140,6 +140,31 @@ def test_non_positive_ae_awb_convergence_raises(tmp_path):
         load_config(path)
 
 
+def test_invalid_awb_mode_raises(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "camera:\n  backend: picamera2\n  picamera2:\n    awb_mode: not_a_mode\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_daylight_awb_mode_succeeds(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "camera:\n  backend: picamera2\n  picamera2:\n    awb_mode: daylight\n",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert config.camera.picamera2.awb_mode == "daylight"
+
+
+def test_default_awb_mode_is_auto():
+    config = load_config(DEFAULT_CONFIG_PATH)
+    assert config.camera.picamera2.awb_mode == "auto"
+
+
 def test_negative_camera_dimensions_raise(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("camera:\n  opencv:\n    width: 0\n", encoding="utf-8")

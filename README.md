@@ -133,6 +133,34 @@ camera:
 現場の照明環境によっては収束に1.5秒以上かかる場合があるので、起動直後の映像が
 まだ不安定な場合はこの値を大きくしてください。
 
+### AWBのプリセットモード（色合いがおかしい場合）
+
+`auto_white_balance: false`時のAWBは既定で"auto"（汎用グレーワールド系アルゴリズム）
+を使いますが、シーン内の色が偏っていると補正を誤り、色かぶりが残ることがあります
+（実機検証: 白色LED照明下でも黄色みが残る事例を確認）。その場合は`awb_mode`で
+照明種別に合ったプリセットを明示的に指定してください。
+
+まず`rpicam-hello`で見比べて一番自然なものを探します。
+
+```bash
+rpicam-hello -t 0 --awb auto
+rpicam-hello -t 0 --awb tungsten
+rpicam-hello -t 0 --awb fluorescent
+rpicam-hello -t 0 --awb indoor
+rpicam-hello -t 0 --awb daylight
+rpicam-hello -t 0 --awb cloudy
+```
+
+良かったモードを`config.yaml`に設定します。
+
+```yaml
+camera:
+  picamera2:
+    awb_mode: daylight   # 例: 白色LED照明下でdaylightが最も自然だった場合
+```
+
+IMX219等、AWBモード指定に対応していないセンサーでは自動的に無視されます。
+
 設定を検証してから起動してください（`systemctl restart`前に必ず実行することを推奨）。
 
 ```bash

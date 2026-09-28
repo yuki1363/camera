@@ -21,6 +21,12 @@ camera:
     height: 720
     auto_exposure: false      # 基準差分方式の安定のため自動露出はOFF推奨
     auto_white_balance: false # 同上、自動ホワイトバランスもOFF推奨
+    # AWBのアルゴリズムモード。"auto"（汎用グレーワールド系）はシーンの色が
+    # 偏っていると補正を誤ることがある（実機検証で黄色みが残る事例あり）。
+    # 現場の照明に合わせて "tungsten"/"fluorescent"/"indoor"/"daylight"/"cloudy"
+    # から一番自然に見えるものを選ぶとよい。選び方: `rpicam-hello -t 0 --awb <mode>`
+    # で見比べてから、良かったものをここに設定する。
+    awb_mode: auto
     # auto_exposure/auto_white_balanceをfalseにした場合、起動直後に一時的に
     # 自動調整を働かせてから、その収束値で固定する（単純にOFFにすると起動直後の
     # 暗すぎる/色がおかしい暫定値のまま固定されてしまうため）。収束待ち時間(秒)。

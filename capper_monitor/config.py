@@ -63,12 +63,20 @@ class Picamera2CameraConfig:
     autofocus_mode: str = "auto"
     lens_position: Optional[float] = None
     ae_awb_convergence_s: float = 1.5
+    awb_mode: str = "auto"
+
+    _VALID_AWB_MODES = ("auto", "tungsten", "fluorescent", "indoor", "daylight", "cloudy", "custom")
 
     def validate(self) -> None:
         if self.width <= 0 or self.height <= 0:
             raise ConfigError("camera.picamera2.width/height は正の値である必要があります")
         if self.ae_awb_convergence_s <= 0:
             raise ConfigError("camera.picamera2.ae_awb_convergence_s は正の値である必要があります")
+        if self.awb_mode not in self._VALID_AWB_MODES:
+            raise ConfigError(
+                f"camera.picamera2.awb_mode は {self._VALID_AWB_MODES} のいずれかである"
+                f"必要があります: {self.awb_mode!r}"
+            )
         if self.autofocus_mode not in ("auto", "manual", "continuous"):
             raise ConfigError(
                 "camera.picamera2.autofocus_mode は 'auto'/'manual'/'continuous' の"
@@ -423,6 +431,7 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
                 float(picamera2_raw["lens_position"]) if "lens_position" in picamera2_raw else None
             ),
             ae_awb_convergence_s=float(picamera2_raw.get("ae_awb_convergence_s", 1.5)),
+            awb_mode=picamera2_raw.get("awb_mode", "auto"),
         ),
     )
 
