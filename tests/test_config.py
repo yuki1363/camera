@@ -125,6 +125,21 @@ def test_default_autofocus_mode_is_auto():
     assert config.camera.picamera2.autofocus_mode == "auto"
 
 
+def test_default_ae_awb_convergence_s_is_positive():
+    config = load_config(DEFAULT_CONFIG_PATH)
+    assert config.camera.picamera2.ae_awb_convergence_s > 0
+
+
+def test_non_positive_ae_awb_convergence_raises(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "camera:\n  backend: picamera2\n  picamera2:\n    ae_awb_convergence_s: 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
 def test_negative_camera_dimensions_raise(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("camera:\n  opencv:\n    width: 0\n", encoding="utf-8")

@@ -21,6 +21,10 @@ camera:
     height: 720
     auto_exposure: false      # 基準差分方式の安定のため自動露出はOFF推奨
     auto_white_balance: false # 同上、自動ホワイトバランスもOFF推奨
+    # auto_exposure/auto_white_balanceをfalseにした場合、起動直後に一時的に
+    # 自動調整を働かせてから、その収束値で固定する（単純にOFFにすると起動直後の
+    # 暗すぎる/色がおかしい暫定値のまま固定されてしまうため）。収束待ち時間(秒)。
+    ae_awb_convergence_s: 1.5
     # Camera Module 3系（オートフォーカス搭載）向けの設定。IMX219等AF非搭載の
     # センサーでは自動的に無視される。
     # "auto"（既定・推奨）: 起動時に1回だけAFを実行し、以後はその位置で固定する

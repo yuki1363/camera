@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 import cv2
@@ -44,12 +45,43 @@ class Picamera2Backend(CameraBackend):
             main={"size": (self._config.width, self._config.height), "format": "RGB888"}
         )
         self._cam.configure(video_config)
-        if not self._config.auto_exposure:
-            self._cam.set_controls({"AeEnable": False})
-        if not self._config.auto_white_balance:
-            self._cam.set_controls({"AwbEnable": False})
         self._cam.start()
+        self._converge_and_lock_ae_awb()
         self._apply_autofocus_settings()
+
+    def _converge_and_lock_ae_awb(self) -> None:
+        """AE/AWBを「OFFにした瞬間の値」で固定するのではなく、起動直後に一定時間
+        自動調整を働かせて収束させてから、その収束値で固定する。
+
+        単純に AeEnable/AwbEnable を False にするだけだと、センサー起動直後の
+        暫定的な（暗すぎる・色がおかしい）値のまま固定されてしまうため。
+        """
+        needs_ae_lock = not self._config.auto_exposure
+        needs_awb_lock = not self._config.auto_white_balance
+        if not (needs_ae_lock or needs_awb_lock):
+            return
+
+        enable_controls = {}
+        if needs_ae_lock:
+            enable_controls["AeEnable"] = True
+        if needs_awb_lock:
+            enable_controls["AwbEnable"] = True
+        self._cam.set_controls(enable_controls)
+        time.sleep(self._config.ae_awb_convergence_s)
+
+        metadata = self._cam.capture_metadata()
+        lock_controls = {}
+        if needs_ae_lock:
+            lock_controls["AeEnable"] = False
+            if "ExposureTime" in metadata:
+                lock_controls["ExposureTime"] = metadata["ExposureTime"]
+            if "AnalogueGain" in metadata:
+                lock_controls["AnalogueGain"] = metadata["AnalogueGain"]
+        if needs_awb_lock:
+            lock_controls["AwbEnable"] = False
+            if "ColourGains" in metadata:
+                lock_controls["ColourGains"] = metadata["ColourGains"]
+        self._cam.set_controls(lock_controls)
 
     def _apply_autofocus_settings(self) -> None:
         """Camera Module 3系（オートフォーカス搭載）向けにAFを制御する。
