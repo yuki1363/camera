@@ -4,7 +4,6 @@ import logging
 import time
 from typing import Optional
 
-import cv2
 import numpy as np
 
 from capper_monitor.config import Picamera2CameraConfig
@@ -153,11 +152,11 @@ class Picamera2Backend(CameraBackend):
         if self._cam is None:
             return None
         try:
-            rgb = self._cam.capture_array()
+            # picamera2の"RGB888"はメモリ上[B, G, R]順（名前と逆）なので、そのままOpenCVのBGRとして使える
+            return self._cam.capture_array()
         except Exception:
             logger.exception("Picamera2Backend: フレーム読取中に例外が発生しました")
             return None
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
     def close(self) -> None:
         if self._cam is not None:
