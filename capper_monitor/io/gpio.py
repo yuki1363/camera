@@ -64,17 +64,36 @@ def _read_chip_label(number: int) -> Optional[str]:
         lgpio.gpiochip_close(handle)
 
 
+def _create_lgpio_factory(chip: int):
+    """指定したgpiochipを開くLGPIOFactoryを作る。
+
+    gpiozero 2.0 / 2.0.1（Raspberry Pi OSのaptパッケージ版）の LGPIOFactory.__init__ は
+    chip 引数を無視して常に gpiochip4（Pi 5）か gpiochip0 を開く不具合がある
+    （2.0.1.post3 で修正）。チップ番号が 0/4 以外になるOSでも動くよう、初期化を自前で行う。
+    """
+    import lgpio
+    from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
+    from gpiozero.pins.local import LocalPiFactory
+
+    class _ChipLGPIOFactory(LGPIOFactory):
+        def __init__(self, chip_number: int):
+            LocalPiFactory.__init__(self)
+            self._handle = lgpio.gpiochip_open(chip_number)
+            self._chip = chip_number
+            self.pin_class = LGPIOPin
+
+    return _ChipLGPIOFactory(chip)
+
+
 def build_pin_factory(name: str, chip: Union[str, int] = "auto"):
     if name == "lgpio":
-        from gpiozero.pins.lgpio import LGPIOFactory
-
         if chip == "auto":
             number, label = find_gpio_chip(_list_chip_numbers(), _read_chip_label)
             logger.info("GPIOチップ gpiochip%d (%s) を使用します", number, label)
         else:
             number = int(chip)
             logger.info("GPIOチップ gpiochip%d を使用します（gpio.chip で指定）", number)
-        return LGPIOFactory(chip=number)
+        return _create_lgpio_factory(number)
     if name == "mock":
         from gpiozero.pins.mock import MockFactory
 

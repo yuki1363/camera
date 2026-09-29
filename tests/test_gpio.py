@@ -5,6 +5,7 @@ from capper_monitor.io.gpio import (
     AlarmOutput,
     DebouncedInput,
     GpioChipNotFoundError,
+    build_pin_factory,
     create_gpio_resources,
     find_gpio_chip,
 )
@@ -107,3 +108,34 @@ def test_find_gpio_chip_raises_with_found_labels_when_no_header_chip():
     chips = {11: "gpio-brcmstb@107d508500"}
     with pytest.raises(GpioChipNotFoundError, match="gpiochip11"):
         find_gpio_chip(chips, chips.get)
+
+
+def test_lgpio_factory_opens_the_requested_chip_number(monkeypatch):
+    """gpiozero 2.0.1 は chip 引数を無視して 0/4 を開くため、指定番号で開くことを確認する。"""
+    lgpio = pytest.importorskip("lgpio")
+    opened, closed = [], []
+    monkeypatch.setattr(lgpio, "gpiochip_open", lambda chip: opened.append(chip) or 1000 + chip)
+    monkeypatch.setattr(lgpio, "gpiochip_close", lambda handle: closed.append(handle))
+
+    factory = build_pin_factory("lgpio", 15)
+    try:
+        assert opened == [15]
+        assert factory.chip == 15
+    finally:
+        factory.close()
+    assert closed == [1015]
+
+
+def test_lgpio_factory_auto_uses_detected_chip(monkeypatch):
+    lgpio = pytest.importorskip("lgpio")
+    import capper_monitor.io.gpio as gpio_module
+
+    monkeypatch.setattr(gpio_module, "_list_chip_numbers", lambda: [11, 15])
+    monkeypatch.setattr(gpio_module, "_read_chip_label", {11: "gpio-brcmstb@107d517c00", 15: "pinctrl-rp1"}.get)
+    opened = []
+    monkeypatch.setattr(lgpio, "gpiochip_open", lambda chip: opened.append(chip) or 1)
+    monkeypatch.setattr(lgpio, "gpiochip_close", lambda handle: None)
+
+    factory = build_pin_factory("lgpio", "auto")
+    factory.close()
+    assert opened == [15]
