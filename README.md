@@ -105,9 +105,11 @@ sudo apt install -y python3-picamera2
 設定ファイルをコピーして編集します。
 
 ```bash
-sudo mkdir -p /etc/capper-monitor
+sudo mkdir -p /etc/capper-monitor /var/log/capper-monitor
 sudo cp config/config.yaml /etc/capper-monitor/config.yaml
-sudo nano /etc/capper-monitor/config.yaml
+# サービスは自分のユーザーで動かす（スマホ調整画面からの保存・ログ出力に書き込み権限が必要）
+sudo chown -R $USER:$USER /etc/capper-monitor /var/log/capper-monitor
+nano /etc/capper-monitor/config.yaml
 ```
 
 ### Camera Module 3（オートフォーカス搭載）を使う場合の注意
@@ -281,7 +283,8 @@ IMX219等、AWBモード指定に対応していないセンサーでは自動�
 ## systemdサービスとして常駐させる
 
 ```bash
-sudo cp systemd/capper-monitor.service /etc/systemd/system/
+# User= を自分のユーザー名に置き換えて登録する（rootでは動かさない）
+sed "s/^User=.*/User=$USER/" systemd/capper-monitor.service | sudo tee /etc/systemd/system/capper-monitor.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now capper-monitor
 sudo systemctl status capper-monitor
@@ -295,6 +298,9 @@ journalctl -u capper-monitor -f
   `socket`のみで実装）。
 - `lgpio` が `/dev/gpiochip*` へアクセスできるよう、サービス実行ユーザーを `gpio`/`video`
   グループに所属させてください（`SupplementaryGroups`設定済み）。
+- サービス稼働中に手動で `python -m capper_monitor` を実行すると、カメラ・GPIOが二重に
+  使われるため多重起動防止ロックで停止します。手動で動かすときは先に
+  `sudo systemctl stop capper-monitor` してください。
 
 ## リセットの挙動（非ラッチ方式）
 

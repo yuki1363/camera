@@ -7,6 +7,8 @@
 #     できなくなる。ラズパイ本体のインターネット接続が別途必要な場合は、有線LANまたは
 #     USB Wi-Fiドングルの追加を検討すること。
 #   - セキュリティのため、必ずWPA2パスフレーズを設定する（オープンAPにはしない）。
+#   - 既存のWi-Fi（子機）設定が残っていても、再起動時は必ずAPが起動するように
+#     自動接続の優先度を上げる（現場で確実にスマホからつながるようにするため）。
 #
 # 使い方:
 #   sudo ./scripts/setup_wifi_ap.sh <SSID> <パスフレーズ(8文字以上)> [接続名]
@@ -58,6 +60,7 @@ nmcli connection modify "${CON_NAME}" \
   802-11-wireless.mode ap \
   802-11-wireless.band bg \
   ipv4.method shared \
+  connection.autoconnect-priority 100 \
   wifi-sec.key-mgmt wpa-psk \
   wifi-sec.psk "${PASSPHRASE}"
 
@@ -71,3 +74,4 @@ echo "を開いてください（web.port は config/config.yaml の web.port、
 echo ""
 echo "AP側のIPアドレスを確認する: nmcli -f IP4.ADDRESS connection show '${CON_NAME}'"
 echo "元の子機モードに戻す:       nmcli connection down '${CON_NAME}'"
+echo "  （再起動すると再びAPになる。APを使わなくする: nmcli connection modify '${CON_NAME}' connection.autoconnect no）"
