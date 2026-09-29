@@ -7,6 +7,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .roi import RoiFractional
+
 _SMOOTHING_WINDOW = 3
 _SMOOTHING_MIN_COUNT = 2
 
@@ -25,13 +27,25 @@ class MotionDetector:
     抑えるため、直近数フレームの多数決で最終判定を行う（内部実装の詳細でありconfig化しない）。
     """
 
-    def __init__(self, motion_threshold: int, motion_ratio: float):
+    def __init__(self, motion_threshold: int, motion_ratio: float, roi: Optional[RoiFractional] = None):
         self._motion_threshold = motion_threshold
         self._motion_ratio = motion_ratio
+        # None なら画面全体を見る
+        self._roi = roi
         self._prev_gray: Optional[np.ndarray] = None
         self._history: deque = deque(maxlen=_SMOOTHING_WINDOW)
 
+    @property
+    def motion_ratio(self) -> float:
+        return self._motion_ratio
+
+    @motion_ratio.setter
+    def motion_ratio(self, value: float) -> None:
+        self._motion_ratio = value
+
     def detect(self, frame: np.ndarray) -> MotionResult:
+        if self._roi is not None:
+            frame = self._roi.crop(frame)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
 

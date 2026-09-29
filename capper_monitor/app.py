@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import signal
+import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -33,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 _NO_MOTION = MotionResult(motion_detected=False, ratio=0.0)
 
+# 補充の動き量の「直近ピーク」を出す期間（秒）。しきい値を決める目安としてスマホ画面に出す
+_MOTION_PEAK_WINDOW_S = 5.0
+
+_POWEROFF_COMMAND = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]
+
 _STRATEGY_LABELS = {"baseline_diff": "基準差分", "edge_density": "エッジ密度", "color_mask": "色マスク"}
 
 
@@ -59,9 +66,12 @@ class App:
 
         self.gpio: GpioResources = create_gpio_resources(config.gpio, pin_factory=gpio_pin_factory)
         self.frame_buffer: Optional[FrameBuffer] = FrameBuffer() if config.web.enabled else None
+        self._calibration_enabled = config.web.enabled and config.web.calibration_enabled
+        self._shutdown_enabled = config.web.enabled and config.web.shutdown_enabled
         self._commands: Optional[CommandQueue] = (
-            CommandQueue() if config.web.enabled and config.web.calibration_enabled else None
+            CommandQueue() if self._calibration_enabled or self._shutdown_enabled else None
         )
+        self._poweroff = _run_poweroff
 
         self._lock = SingletonLock(config.app.lock_file_path)
         self._watchdog = WatchdogNotifier(enabled=config.app.watchdog_enabled)
@@ -74,6 +84,8 @@ class App:
         self._last_reason = "startup"
         self._last_score: Optional[float] = None
         self._last_correlation: Optional[float] = None
+        self._last_motion: MotionResult = _NO_MOTION
+        self._motion_history: deque = deque()
 
     def run(self, install_signal_handlers: bool = True) -> None:
         self._lock.acquire()
@@ -147,6 +159,7 @@ class App:
         self._last_score = detection_result.score
 
         motion_result = self.motion_detector.detect(frame) if self.motion_detector is not None else _NO_MOTION
+        self._record_motion(motion_result, now)
 
         result = self.state_machine.update(
             raw_line_visible=detection_result.line_visible,
@@ -198,6 +211,15 @@ class App:
             log_event(logger, logging.INFO, "detection_error_cleared")
             self._detection_error_active = False
 
+    def _record_motion(self, result: MotionResult, now: float) -> None:
+        self._last_motion = result
+        self._motion_history.append((now, result.ratio))
+        while self._motion_history and now - self._motion_history[0][0] > _MOTION_PEAK_WINDOW_S:
+            self._motion_history.popleft()
+
+    def _motion_peak(self) -> float:
+        return max((ratio for _, ratio in self._motion_history), default=0.0)
+
     def _publish(self, frame: np.ndarray, reason: str) -> None:
         if self.frame_buffer is None:
             return
@@ -220,8 +242,15 @@ class App:
             baseline_ready=isinstance(self.detector, BaselineDiffDetector) and self.detector.is_ready,
             alignment_ready=self.alignment_checker is not None and self.alignment_checker.is_ready,
             alignment_correlation=self._last_correlation,
-            calibration_enabled=self._commands is not None,
+            calibration_enabled=self._calibration_enabled,
+            shutdown_enabled=self._shutdown_enabled,
             roi={"x": cfg.roi.x, "y": cfg.roi.y, "w": cfg.roi.w, "h": cfg.roi.h},
+            motion_enabled=self.motion_detector is not None,
+            motion_ratio=self._last_motion.ratio,
+            motion_peak=self._motion_peak(),
+            motion_threshold=cfg.refill_detection.motion_ratio,
+            motion_detected=self._last_motion.motion_detected,
+            motion_roi=_roi_dict(cfg.refill_detection.roi),
         )
 
     def _draw_overlay(self, image: np.ndarray) -> None:
@@ -229,19 +258,64 @@ class App:
         _draw_roi(image, cfg.roi, (255, 200, 0), "ROI")
         if self.alignment_checker is not None:
             _draw_roi(image, cfg.alignment_check.roi, (255, 0, 255), "ALIGN")
+        if self.motion_detector is not None and cfg.refill_detection.roi is not None:
+            _draw_roi(image, cfg.refill_detection.roi, (0, 200, 0), "MOTION")
 
     def _handle_command(self, name: str, frame: np.ndarray, **kwargs) -> dict:
         handlers = {
             "set_roi": self._cmd_set_roi,
             "set_threshold": self._cmd_set_threshold,
+            "set_motion_roi": self._cmd_set_motion_roi,
+            "set_motion_ratio": self._cmd_set_motion_ratio,
             "capture_baseline": self._cmd_capture_baseline,
             "capture_alignment": self._cmd_capture_alignment,
             "save": self._cmd_save,
         }
+        if name == "shutdown":
+            if not self._shutdown_enabled:
+                raise CalibrationError("シャットダウン機能は無効です（web.shutdown_enabled: false）")
+            return self._cmd_shutdown(frame)
         handler = handlers.get(name)
         if handler is None:
             raise CalibrationError(f"未知の操作です: {name}")
+        if not self._calibration_enabled:
+            raise CalibrationError("調整機能は無効です（web.calibration_enabled: false）")
         return handler(frame, **kwargs)
+
+    def _cmd_set_motion_roi(self, frame: np.ndarray, x: float, y: float, w: float, h: float) -> dict:
+        if self.motion_detector is None:
+            raise CalibrationError("補充の動き検知（detection.refill_detection）が無効です")
+        roi = RoiConfig(x=x, y=y, w=w, h=h)
+        try:
+            roi.validate("roi")
+        except ConfigError as exc:
+            raise CalibrationError(str(exc)) from exc
+        refill = replace(self._detection_cfg.refill_detection, roi=roi)
+        self._detection_cfg = replace(self._detection_cfg, refill_detection=refill)
+        self.motion_detector = create_motion_detector(self._detection_cfg)
+        self._motion_history.clear()
+        log_event(logger, logging.INFO, "calibration_motion_roi_updated", x=f"{x:.3f}", y=f"{y:.3f}", w=f"{w:.3f}", h=f"{h:.3f}")
+        return {"message": "補充の動きを見る範囲を更新しました。「保存」で確定してください。"}
+
+    def _cmd_set_motion_ratio(self, frame: np.ndarray, value: float) -> dict:
+        if self.motion_detector is None:
+            raise CalibrationError("補充の動き検知（detection.refill_detection）が無効です")
+        if not (0.0 < value < 1.0):
+            raise CalibrationError("動きのしきい値は0より大きく1より小さい値にしてください")
+        refill = replace(self._detection_cfg.refill_detection, motion_ratio=value)
+        self._detection_cfg = replace(self._detection_cfg, refill_detection=refill)
+        self.motion_detector.motion_ratio = value
+        log_event(logger, logging.INFO, "calibration_motion_ratio_updated", value=f"{value:.4f}")
+        return {"message": f"動きのしきい値を {value:.4f} にしました。「保存」で確定してください。"}
+
+    def _cmd_shutdown(self, frame: np.ndarray) -> dict:
+        # 停止中にPLCへ「キャップ減少」を出しっぱなしにしないよう、先に出力をOFFにする
+        self.gpio.alarm_output.set(False)
+        log_event(logger, logging.WARNING, "shutdown_requested")
+        self._poweroff()
+        return {
+            "message": "シャットダウンを開始しました。約20秒後、ラズパイの緑LEDが消えてから電源を抜いてください。"
+        }
 
     def _cmd_set_roi(self, frame: np.ndarray, x: float, y: float, w: float, h: float) -> dict:
         roi = RoiConfig(x=x, y=y, w=w, h=h)
@@ -312,6 +386,8 @@ class App:
                 "baseline_diff": cfg.baseline_diff.density_threshold,
                 "color_mask": cfg.color_mask.pixel_ratio_threshold,
             },
+            motion_roi=cfg.refill_detection.roi,
+            motion_ratio=cfg.refill_detection.motion_ratio,
         )
         log_event(logger, logging.INFO, "calibration_saved", path=self._config_path)
         return {"message": "保存しました。再起動後もこの設定で動作します。"}
@@ -384,3 +460,21 @@ def _draw_roi(image: np.ndarray, roi_cfg, color, label: str) -> None:
     x0, y0, x1, y1 = RoiFractional(roi_cfg.x, roi_cfg.y, roi_cfg.w, roi_cfg.h).to_pixels(image.shape)
     cv2.rectangle(image, (x0, y0), (x1 - 1, y1 - 1), color, 2)
     cv2.putText(image, label, (x0 + 3, max(y0 - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+
+def _roi_dict(roi) -> Optional[dict]:
+    return None if roi is None else {"x": roi.x, "y": roi.y, "w": roi.w, "h": roi.h}
+
+
+def _run_poweroff() -> None:
+    """sudoers で許可された `systemctl poweroff` だけを、パスワードなしで実行する。"""
+    hint = "README の「シャットダウン用の sudo 設定」を行ったか確認してください。"
+    try:
+        result = subprocess.run(_POWEROFF_COMMAND, capture_output=True, text=True, timeout=10)
+    except FileNotFoundError as exc:
+        raise CalibrationError(f"sudo が見つかりません。{hint}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CalibrationError("シャットダウンの実行が時間内に終わりませんでした。") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()
+        raise CalibrationError(f"シャットダウンを実行できませんでした（{detail}）。{hint}")

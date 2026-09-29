@@ -79,4 +79,8 @@ def create_alignment_checker(cfg: DetectionConfig) -> AlignmentChecker:
 
 def create_motion_detector(cfg: DetectionConfig) -> MotionDetector:
     c = cfg.refill_detection
-    return MotionDetector(motion_threshold=c.motion_threshold, motion_ratio=c.motion_ratio)
+    return MotionDetector(
+        motion_threshold=c.motion_threshold,
+        motion_ratio=c.motion_ratio,
+        roi=_roi(c.roi) if c.roi is not None else None,
+    )

@@ -200,8 +200,12 @@ class RefillDetectionConfig:
     motion_threshold: int = 25
     motion_ratio: float = 0.05
     blink_interval_ms: int = 400
+    # 動きを見る範囲。None なら画面全体（人の手や体が横切っても動きとして数えてしまう）
+    roi: Optional[RoiConfig] = None
 
     def validate(self) -> None:
+        if self.roi is not None:
+            self.roi.validate("detection.refill_detection.roi")
         if not (0 <= self.motion_threshold <= 255):
             raise ConfigError("detection.refill_detection.motion_threshold は0〜255の範囲で指定してください")
         if not (0.0 < self.motion_ratio < 1.0):
@@ -337,6 +341,7 @@ class WebConfig:
     stream_fps: int = 8
     jpeg_quality: int = 70
     calibration_enabled: bool = True
+    shutdown_enabled: bool = False
 
     def validate(self) -> None:
         if not (1 <= self.port <= 65535):
@@ -501,6 +506,11 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
         motion_threshold=int(rd_raw.get("motion_threshold", 25)),
         motion_ratio=float(rd_raw.get("motion_ratio", 0.05)),
         blink_interval_ms=int(rd_raw.get("blink_interval_ms", 400)),
+        roi=(
+            _roi_from_dict(rd_raw["roi"], "detection.refill_detection.roi")
+            if rd_raw.get("roi") is not None
+            else None
+        ),
     )
 
     detection = DetectionConfig(
@@ -571,6 +581,7 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
         stream_fps=int(web_raw.get("stream_fps", 8)),
         jpeg_quality=int(web_raw.get("jpeg_quality", 70)),
         calibration_enabled=bool(web_raw.get("calibration_enabled", True)),
+        shutdown_enabled=bool(web_raw.get("shutdown_enabled", False)),
     )
 
     logging_raw = _as_dict(raw.get("logging", {}), "logging")

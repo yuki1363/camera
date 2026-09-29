@@ -33,6 +33,10 @@
   #message.error { background: #5a1d1d; }
   .notice { background: #5a1d1d; padding: 10px; border-radius: 6px; }
   [hidden] { display: none !important; }
+  .motion-on { color: #ffca28; }
+  .danger { background: #2a1616; border: 1px solid #6a2a2a; border-radius: 6px; padding: 10px; margin: 18px 0 8px; }
+  .danger p { margin: 0 0 8px; font-size: 0.9em; color: #e0b0b0; }
+  button.shutdown { background: #b71c1c; }
 </style>
 </head>
 <body>
@@ -64,6 +68,15 @@
       <p><span class="num"></span> 位置ズレ検知の基準を撮る（紫の枠の中は、いつも動かない場所にしておく）</p>
       <button id="btn-alignment">位置ズレ基準を撮影</button>
     </div>
+    <div class="step" id="step-motion" hidden>
+      <p><span class="num"></span> 補充の動き（点滅の条件）を合わせる。キャップを入れる場所を指でなぞり、下のボタンで動きを見る範囲にする（緑の枠）。人が横切るだけの場所は入れない。キャップを補充して「直近5秒の最大」を見て、補充していないときの値より上、補充中の最大より下にしきい値を合わせる</p>
+      <button id="btn-motion-roi" disabled>選んだ範囲を補充の動き範囲にする</button>
+      <div class="info" id="motion-info" style="margin:8px 0"></div>
+      <div class="row">
+        <input id="motion-ratio" type="number" step="0.001" min="0.001" max="0.999" inputmode="decimal">
+        <button id="btn-motion-ratio">動きのしきい値を適用</button>
+      </div>
+    </div>
     <div class="step">
       <p><span class="num"></span> 満杯時とライン露出時のスコアをそれぞれ見て、その間の値をしきい値にする（スコア≧しきい値で「キャップ減少」）。キャップを出し入れして切り替わるか確認</p>
       <div class="row">
@@ -75,10 +88,18 @@
       <p><span class="num"></span> 問題なければ保存（再起動後もこの設定で動きます）</p>
       <button id="btn-save" class="save">保存</button>
     </div>
+
+    {% if shutdown_enabled %}
+    <div class="danger">
+      <p>ラズパイの電源を切る前に押す（SDカードを壊さないため）。押すと監視とPLCへの出力が止まります。</p>
+      <button id="btn-shutdown" class="shutdown">シャットダウン</button>
+    </div>
+    {% endif %}
   </div>
 
 <script>
 const CALIBRATION_ENABLED = {{ 'true' if calibration_enabled else 'false' }};
+const SHUTDOWN_ENABLED = {{ 'true' if shutdown_enabled else 'false' }};
 const STATE_LABELS = { normal: '正常', steady: 'キャップ減少', blink: '補充中' };
 const DETECTOR_LABELS = { baseline_diff: '基準差分', edge_density: 'エッジ密度', color_mask: '色マスク' };
 const REASON_LABELS = {
@@ -91,13 +112,16 @@ const img = document.getElementById('stream');
 const canvas = document.getElementById('overlay');
 const ctx = canvas.getContext('2d');
 const thresholdInput = document.getElementById('threshold');
-const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save']
+const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save', 'btn-motion-roi', 'btn-motion-ratio']
   .map(id => document.getElementById(id));
 
 let drag = null;
 let selection = null;
 let busy = false;
 let thresholdEdited = false;
+let motionRatioEdited = false;
+let shutdownDone = false;
+const motionRatioInput = document.getElementById('motion-ratio');
 
 function clamp(v) { return Math.min(1, Math.max(0, v)); }
 
@@ -152,6 +176,9 @@ canvas.addEventListener('pointerup', e => {
 function updateButtons() {
   buttons.forEach(b => { b.disabled = busy || !CALIBRATION_ENABLED; });
   document.getElementById('btn-roi').disabled = busy || !CALIBRATION_ENABLED || !selection;
+  document.getElementById('btn-motion-roi').disabled = busy || !CALIBRATION_ENABLED || !selection;
+  const shutdownBtn = document.getElementById('btn-shutdown');
+  if (shutdownBtn) shutdownBtn.disabled = busy || shutdownDone;
 }
 
 function showMessage(text, isError) {
@@ -188,6 +215,28 @@ document.getElementById('btn-roi').addEventListener('click', async () => {
     draw();
   }
 });
+document.getElementById('btn-motion-roi').addEventListener('click', async () => {
+  if (selection && await post('/api/motion_roi', selection)) {
+    selection = null;
+    draw();
+  }
+});
+document.getElementById('btn-motion-ratio').addEventListener('click', async () => {
+  if (await post('/api/motion_ratio', { value: parseFloat(motionRatioInput.value) })) {
+    motionRatioEdited = false;
+  }
+});
+motionRatioInput.addEventListener('input', () => { motionRatioEdited = true; });
+const shutdownButton = document.getElementById('btn-shutdown');
+if (shutdownButton) {
+  shutdownButton.addEventListener('click', async () => {
+    if (!confirm('監視とPLCへの出力が止まります。シャットダウンしますか？')) return;
+    if (await post('/api/shutdown')) {
+      shutdownDone = true;
+      updateButtons();
+    }
+  });
+}
 document.getElementById('btn-baseline').addEventListener('click', () => post('/api/baseline'));
 document.getElementById('btn-alignment').addEventListener('click', () => post('/api/alignment'));
 document.getElementById('btn-save').addEventListener('click', () => post('/api/save'));
@@ -199,12 +248,14 @@ document.getElementById('btn-threshold').addEventListener('click', async () => {
 thresholdInput.addEventListener('input', () => { thresholdEdited = true; });
 
 // 基準フレーム撮影は baseline_diff 方式のときだけ必要。表示中の手順だけに番号を振り直す。
-const STEP_NUMBERS = ['①', '②', '③', '④', '⑤'];
+const STEP_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥'];
 let lastStrategy = null;
-function updateSteps(strategy) {
-  if (strategy === lastStrategy) return;
-  lastStrategy = strategy;
+function updateSteps(strategy, motionEnabled) {
+  const key = strategy + '/' + motionEnabled;
+  if (key === lastStrategy) return;
+  lastStrategy = key;
   document.getElementById('step-baseline').hidden = strategy !== 'baseline_diff';
+  document.getElementById('step-motion').hidden = !motionEnabled;
   let n = 0;
   document.querySelectorAll('.step').forEach(step => {
     if (!step.hidden) step.querySelector('.num').textContent = STEP_NUMBERS[n++];
@@ -220,7 +271,7 @@ async function pollStatus() {
   try {
     const res = await fetch('/status', { cache: 'no-store' });
     const s = await res.json();
-    updateSteps(s.configured_strategy);
+    updateSteps(s.configured_strategy, s.motion_enabled);
     const badge = document.getElementById('status');
     badge.textContent = STATE_LABELS[s.state] || s.state || '---';
     badge.className = 'state-' + (s.state || 'normal');
@@ -235,6 +286,18 @@ async function pollStatus() {
     lines.push('位置ズレ基準: <b>' + (s.alignment_ready ? '撮影済み（一致度 ' + fmt(s.alignment_correlation, 2) + '）' : '未撮影') + '</b>');
     if (s.reason) lines.push('状況: ' + esc(REASON_LABELS[s.reason] || s.reason));
     document.getElementById('info').innerHTML = lines.join('<br>');
+
+    if (s.motion_enabled) {
+      const range = s.motion_roi ? '指定した範囲' : '画面全体（範囲を指定してください）';
+      document.getElementById('motion-info').innerHTML =
+        '動き量: <b class="' + (s.motion_detected ? 'motion-on' : '') + '">' + fmt(s.motion_ratio, 3) + '</b>' +
+        ' / 直近5秒の最大: <b>' + fmt(s.motion_peak, 3) + '</b>' +
+        ' / しきい値: <b>' + fmt(s.motion_threshold, 3) + '</b>' + (s.motion_detected ? '（動きあり）' : '') +
+        '<br>見ている範囲: ' + range;
+      if (!motionRatioEdited && document.activeElement !== motionRatioInput && s.motion_threshold !== null && s.motion_threshold !== undefined) {
+        motionRatioInput.value = Number(s.motion_threshold).toFixed(3);
+      }
+    }
 
     if (!thresholdEdited && document.activeElement !== thresholdInput && s.threshold !== null && s.threshold !== undefined) {
       thresholdInput.value = Number(s.threshold).toFixed(4);

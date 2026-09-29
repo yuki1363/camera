@@ -76,3 +76,55 @@ def test_timeout_is_reported_as_camera_problem():
     response = make_client(commands).post("/api/baseline")
     assert response.status_code == 504
     assert response.get_json()["ok"] is False
+
+
+def make_client_with(commands, **web):
+    return create_app(FrameBuffer(), WebConfig(**web), commands=commands).test_client()
+
+
+def test_motion_roi_and_ratio_are_forwarded():
+    commands = StubCommands()
+    client = make_client_with(commands)
+    assert client.post("/api/motion_roi", json={"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}).status_code == 200
+    assert client.post("/api/motion_ratio", json={"value": 0.03}).status_code == 200
+    assert commands.calls == [
+        ("set_motion_roi", {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}),
+        ("set_motion_ratio", {"value": 0.03}),
+    ]
+
+
+def test_invalid_motion_bodies_are_rejected():
+    commands = StubCommands()
+    client = make_client_with(commands)
+    assert client.post("/api/motion_roi", json={"x": "a"}).status_code == 400
+    assert client.post("/api/motion_ratio", json={}).status_code == 400
+    assert commands.calls == []
+
+
+def test_shutdown_is_forbidden_unless_enabled():
+    commands = StubCommands()
+    response = make_client_with(commands).post("/api/shutdown")
+    assert response.status_code == 403
+    assert commands.calls == []
+
+
+def test_shutdown_is_forwarded_when_enabled():
+    commands = StubCommands()
+    response = make_client_with(commands, shutdown_enabled=True).post("/api/shutdown")
+    assert response.status_code == 200
+    assert commands.calls == [("shutdown", {})]
+
+
+def test_shutdown_works_even_when_calibration_is_disabled():
+    commands = StubCommands()
+    client = make_client_with(commands, shutdown_enabled=True, calibration_enabled=False)
+    assert client.post("/api/shutdown").status_code == 200
+    assert client.post("/api/save").status_code == 403
+    assert client.post("/api/motion_ratio", json={"value": 0.03}).status_code == 403
+    assert commands.calls == [("shutdown", {})]
+
+
+def test_calibrate_page_shows_shutdown_button_only_when_enabled():
+    assert b'id="btn-shutdown"' not in make_client_with(StubCommands()).get("/calibrate").data
+    page = make_client_with(StubCommands(), shutdown_enabled=True).get("/calibrate")
+    assert b'id="btn-shutdown"' in page.data

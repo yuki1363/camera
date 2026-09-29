@@ -68,8 +68,11 @@ def save_calibration(
     config_path: str | Path,
     roi=None,
     thresholds: Optional[Dict[str, float]] = None,
+    motion_roi=None,
+    motion_ratio: Optional[float] = None,
 ) -> None:
-    """ROIと各方式のしきい値だけを書き換える。コメントや他の設定値はそのまま残す。"""
+    """ROIと各方式のしきい値、補充の動き検知（範囲・しきい値）だけを書き換える。
+    コメントや他の設定値はそのまま残す。"""
     from ruamel.yaml import YAML
 
     path = Path(config_path)
@@ -85,5 +88,13 @@ def save_calibration(
     for strategy, value in (thresholds or {}).items():
         section = detection.setdefault(strategy, {})
         section[_THRESHOLD_KEYS[strategy]] = round(float(value), 4)
+
+    refill = detection.setdefault("refill_detection", {})
+    if motion_roi is not None:
+        motion_map = refill.setdefault("roi", {})
+        for key in ("x", "y", "w", "h"):
+            motion_map[key] = round(float(getattr(motion_roi, key)), 4)
+    if motion_ratio is not None:
+        refill["motion_ratio"] = round(float(motion_ratio), 4)
 
     yaml.dump(data, path)

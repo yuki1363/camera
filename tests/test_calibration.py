@@ -88,3 +88,16 @@ def test_save_calibration_updates_values_and_keeps_comments(tmp_path):
     # 他の設定値とコメントが残っていること
     assert config.camera.backend == "opencv"
     assert "基準との差分エッジ密度がこの比率を超えたら" in path.read_text(encoding="utf-8")
+
+
+def test_save_calibration_persists_motion_settings_and_keeps_comments(tmp_path):
+    path = tmp_path / "config.yaml"
+    shutil.copy(REPO_CONFIG, path)
+
+    save_calibration(path, motion_roi=RoiConfig(x=0.2, y=0.3, w=0.4, h=0.5), motion_ratio=0.031)
+
+    refill = load_config(path).detection.refill_detection
+    assert refill.roi == RoiConfig(x=0.2, y=0.3, w=0.4, h=0.5)
+    assert refill.motion_ratio == 0.031
+    assert refill.blink_interval_ms == 400  # 他の設定は変わらない
+    assert "キャップ投入中の点滅周期" in path.read_text(encoding="utf-8")

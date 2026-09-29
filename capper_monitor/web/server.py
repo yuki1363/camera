@@ -18,8 +18,11 @@ _MJPEG_BOUNDARY = b"--frame"
 
 
 def create_app(frame_buffer: FrameBuffer, web_config: WebConfig, commands=None) -> Flask:
-    """commands が None の場合（web.calibration_enabled: false）は調整APIを受け付けない。"""
+    """commands が None の場合は調整・シャットダウンAPIを受け付けない。
+    調整は web.calibration_enabled、シャットダウンは web.shutdown_enabled で別々に有効にする。"""
     app = Flask(__name__, template_folder=str(_TEMPLATE_DIR))
+    calibration_enabled = commands is not None and web_config.calibration_enabled
+    shutdown_enabled = commands is not None and web_config.shutdown_enabled
 
     @app.route("/")
     def index():
@@ -27,7 +30,9 @@ def create_app(frame_buffer: FrameBuffer, web_config: WebConfig, commands=None) 
 
     @app.route("/calibrate")
     def calibrate():
-        return render_template("calibrate.html", calibration_enabled=commands is not None)
+        return render_template(
+            "calibrate.html", calibration_enabled=calibration_enabled, shutdown_enabled=shutdown_enabled
+        )
 
     @app.route("/status")
     def status():
@@ -51,7 +56,10 @@ def create_app(frame_buffer: FrameBuffer, web_config: WebConfig, commands=None) 
         return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
     def run_command(name: str, **kwargs):
-        if commands is None:
+        if name == "shutdown":
+            if not shutdown_enabled:
+                return jsonify(ok=False, error="シャットダウン機能は無効です（web.shutdown_enabled: false）"), 403
+        elif not calibration_enabled:
             return jsonify(ok=False, error="調整機能は無効です（web.calibration_enabled: false）"), 403
         try:
             result = commands.submit(name, **kwargs)
@@ -69,6 +77,28 @@ def create_app(frame_buffer: FrameBuffer, web_config: WebConfig, commands=None) 
         except (KeyError, TypeError, ValueError):
             return jsonify(ok=False, error="ROIの指定が不正です"), 400
         return run_command("set_roi", **values)
+
+    @app.route("/api/motion_roi", methods=["POST"])
+    def api_motion_roi():
+        body = request.get_json(silent=True) or {}
+        try:
+            values = {key: float(body[key]) for key in ("x", "y", "w", "h")}
+        except (KeyError, TypeError, ValueError):
+            return jsonify(ok=False, error="範囲の指定が不正です"), 400
+        return run_command("set_motion_roi", **values)
+
+    @app.route("/api/motion_ratio", methods=["POST"])
+    def api_motion_ratio():
+        body = request.get_json(silent=True) or {}
+        try:
+            value = float(body["value"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify(ok=False, error="しきい値の指定が不正です"), 400
+        return run_command("set_motion_ratio", value=value)
+
+    @app.route("/api/shutdown", methods=["POST"])
+    def api_shutdown():
+        return run_command("shutdown")
 
     @app.route("/api/threshold", methods=["POST"])
     def api_threshold():

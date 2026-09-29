@@ -247,3 +247,34 @@ def test_gpio_chip_invalid_value_raises(tmp_path, value):
     path.write_text(f"gpio:\n  chip: {value}\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_refill_roi_defaults_to_none_meaning_whole_frame():
+    assert load_config(DEFAULT_CONFIG_PATH).detection.refill_detection.roi is None
+
+
+def test_refill_roi_is_loaded(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "detection:\n  refill_detection:\n    roi:\n      x: 0.1\n      y: 0.2\n      w: 0.3\n      h: 0.4\n",
+        encoding="utf-8",
+    )
+    roi = load_config(path).detection.refill_detection.roi
+    assert (roi.x, roi.y, roi.w, roi.h) == (0.1, 0.2, 0.3, 0.4)
+
+
+def test_refill_roi_out_of_range_raises(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "detection:\n  refill_detection:\n    roi:\n      x: 0.8\n      y: 0.2\n      w: 0.5\n      h: 0.4\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_shutdown_is_off_by_default_in_code_but_on_in_template(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("web:\n  enabled: true\n", encoding="utf-8")
+    assert load_config(path).web.shutdown_enabled is False
+    assert load_config(DEFAULT_CONFIG_PATH).web.shutdown_enabled is True
