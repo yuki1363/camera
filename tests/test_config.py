@@ -11,8 +11,33 @@ DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "config.yaml"
 def test_load_default_config_succeeds():
     config = load_config(DEFAULT_CONFIG_PATH)
     assert config.camera.backend == "opencv"
-    assert config.detection.strategy == "baseline_diff"
+    assert config.detection.strategy == "color_mask"
     assert config.gpio.pin_factory == "lgpio"
+
+
+def test_default_config_uses_red_hue_wraparound_preset():
+    cm = load_config(DEFAULT_CONFIG_PATH).detection.color_mask
+    assert cm.hsv_lower[0] > cm.hsv_upper[0]  # 赤は色相0/180をまたぐ
+    assert cm.hsv_lower[1] >= 50  # 白（低彩度）を除外できる彩度下限
+
+
+@pytest.mark.parametrize(
+    "lower,upper",
+    [
+        ([181, 80, 60], [10, 255, 255]),   # 色相は0〜180
+        ([170, 80, 60], [10, 256, 255]),   # 彩度は0〜255
+        ([170, -1, 60], [10, 255, 255]),
+        ([170, 200, 60], [10, 100, 255]),  # 彩度 lower > upper
+    ],
+)
+def test_color_mask_out_of_range_hsv_raises(tmp_path, lower, upper):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        f"detection:\n  color_mask:\n    hsv_lower: {lower}\n    hsv_upper: {upper}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path)
 
 
 def test_missing_file_raises(tmp_path):

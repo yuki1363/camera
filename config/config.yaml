@@ -41,11 +41,14 @@ camera:
     # lens_position: 5.0   # autofocus_mode: manual のときのみ使用（ディオプター値）
 
 detection:
-  # "baseline_diff" (推奨・既定): キャリブレーション時に撮影した「ラインが見えていない」
-  #                 基準画像との差分でライン出現を検知する。照明変化・背景の固定模様に強い。
+  # "color_mask" (既定・白キャップ＋赤ライン向け): ROI内の「指定色（赤）」の画素の割合で
+  #                 判定する。白いキャップは彩度が低いので赤と確実に区別できる。
+  #                 基準フレーム撮影は不要。
+  # "baseline_diff" : 「ラインが見えていない」基準画像との差分で、新しく現れた輪郭を検知する。
+  #                 ライン露出で輪郭が"増える"現場向け。キャップがぎっしり写る（輪郭が多い）
+  #                 現場では満杯時の方が輪郭が多くなるため使えない。
   # "edge_density"  : Cannyエッジ密度の絶対しきい値方式。baseline未取得時のフォールバック。
-  # "color_mask"    : ラインの色が判明している場合のHSV色マスク方式（現状は無効化推奨）。
-  strategy: baseline_diff
+  strategy: color_mask
   fallback_strategy: edge_density
 
   # ライン検知の対象領域（ROI）。フレームに対する比率(0.0〜1.0)で指定するため、
@@ -72,10 +75,15 @@ detection:
     density_threshold: 0.08
     adaptive: true                  # ROI内の輝度中央値からCanny閾値を動的補正する
 
+  # 色マスク方式の設定（OpenCVのHSV: 色相H 0〜180 / 彩度S 0〜255 / 明度V 0〜255）。
+  # 赤は色相が0と180の両端にまたがるため、hsv_lowerの色相 > hsv_upperの色相 と書くと
+  # 「170〜180 と 0〜10」のように一周をまたぐ範囲として扱う。
+  # 彩度(S)の下限80で白（低彩度）を除外し、明度(V)の下限60で暗すぎる影を除外する。
   color_mask:
-    hsv_lower: [0, 0, 200]
-    hsv_upper: [180, 40, 255]
-    pixel_ratio_threshold: 0.10
+    hsv_lower: [170, 80, 60]
+    hsv_upper: [10, 255, 255]
+    pixel_ratio_threshold: 0.02   # ROI内の赤の割合がこれ以上で「ライン検知」。スマホの調整画面で
+                                  # 満杯時とライン露出時のスコアの間の値に合わせる
 
   debounce:
     on_delay_ms: 500     # ラインが継続してこの時間見え続けたらアラームON

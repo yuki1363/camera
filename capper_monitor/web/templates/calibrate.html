@@ -32,6 +32,7 @@
   #message { min-height: 1.5em; margin: 8px 0; padding: 8px; border-radius: 6px; background: #222; }
   #message.error { background: #5a1d1d; }
   .notice { background: #5a1d1d; padding: 10px; border-radius: 6px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -52,26 +53,26 @@
     {% endif %}
 
     <div class="step">
-      <p>① 映像の上を指でなぞって、ラインが出てくる範囲を四角で囲む（水色の枠が現在のROI）</p>
+      <p><span class="num"></span> 映像の上を指でなぞって、ラインが出てくる範囲を四角で囲む（水色の枠が現在のROI。ライン以外の赤い物が入らないようにする）</p>
       <button id="btn-roi" disabled>選んだ範囲をROIにする</button>
     </div>
-    <div class="step">
-      <p>② キャップを満杯にして（ラインが隠れた状態で）押す</p>
+    <div class="step" id="step-baseline" hidden>
+      <p><span class="num"></span> キャップを満杯にして（ラインが隠れた状態で）押す</p>
       <button id="btn-baseline">基準フレーム撮影</button>
     </div>
     <div class="step">
-      <p>③ 位置ズレ検知の基準を撮る（紫の枠の中は、いつも動かない場所にしておく）</p>
+      <p><span class="num"></span> 位置ズレ検知の基準を撮る（紫の枠の中は、いつも動かない場所にしておく）</p>
       <button id="btn-alignment">位置ズレ基準を撮影</button>
     </div>
     <div class="step">
-      <p>④ キャップを出し入れして状態が切り替わるか確認。切り替わらない場合は、満杯時とライン露出時のスコアの間の値をしきい値にする</p>
+      <p><span class="num"></span> 満杯時とライン露出時のスコアをそれぞれ見て、その間の値をしきい値にする（スコア≧しきい値で「キャップ減少」）。キャップを出し入れして切り替わるか確認</p>
       <div class="row">
         <input id="threshold" type="number" step="0.001" min="0.001" max="0.999" inputmode="decimal">
         <button id="btn-threshold">しきい値を適用</button>
       </div>
     </div>
     <div class="step">
-      <p>⑤ 問題なければ保存（再起動後もこの設定で動きます）</p>
+      <p><span class="num"></span> 問題なければ保存（再起動後もこの設定で動きます）</p>
       <button id="btn-save" class="save">保存</button>
     </div>
   </div>
@@ -197,6 +198,19 @@ document.getElementById('btn-threshold').addEventListener('click', async () => {
 });
 thresholdInput.addEventListener('input', () => { thresholdEdited = true; });
 
+// 基準フレーム撮影は baseline_diff 方式のときだけ必要。表示中の手順だけに番号を振り直す。
+const STEP_NUMBERS = ['①', '②', '③', '④', '⑤'];
+let lastStrategy = null;
+function updateSteps(strategy) {
+  if (strategy === lastStrategy) return;
+  lastStrategy = strategy;
+  document.getElementById('step-baseline').hidden = strategy !== 'baseline_diff';
+  let n = 0;
+  document.querySelectorAll('.step').forEach(step => {
+    if (!step.hidden) step.querySelector('.num').textContent = STEP_NUMBERS[n++];
+  });
+}
+
 function fmt(v, digits) { return (v === null || v === undefined) ? '---' : Number(v).toFixed(digits); }
 function esc(t) {
   return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -206,6 +220,7 @@ async function pollStatus() {
   try {
     const res = await fetch('/status', { cache: 'no-store' });
     const s = await res.json();
+    updateSteps(s.configured_strategy);
     const badge = document.getElementById('status');
     badge.textContent = STATE_LABELS[s.state] || s.state || '---';
     badge.className = 'state-' + (s.state || 'normal');

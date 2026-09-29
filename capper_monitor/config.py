@@ -146,6 +146,14 @@ class ColorMaskConfig:
     def validate(self) -> None:
         if len(self.hsv_lower) != 3 or len(self.hsv_upper) != 3:
             raise ConfigError("detection.color_mask.hsv_lower/hsv_upper は3要素である必要があります")
+        for name, values in (("hsv_lower", self.hsv_lower), ("hsv_upper", self.hsv_upper)):
+            h, s, v = values
+            if not (0 <= h <= 180 and 0 <= s <= 255 and 0 <= v <= 255):
+                raise ConfigError(
+                    f"detection.color_mask.{name} は [H:0〜180, S:0〜255, V:0〜255] の範囲で指定してください: {list(values)}"
+                )
+        if self.hsv_lower[1] > self.hsv_upper[1] or self.hsv_lower[2] > self.hsv_upper[2]:
+            raise ConfigError("detection.color_mask の彩度(S)・明度(V)は hsv_lower ≦ hsv_upper にしてください")
         if not (0.0 < self.pixel_ratio_threshold < 1.0):
             raise ConfigError("detection.color_mask.pixel_ratio_threshold は0〜1の範囲で指定してください")
 
