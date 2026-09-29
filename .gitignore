@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+*.log
+/var/
+
+# 現場でscripts/calibrate.pyが生成する、サイト固有の基準画像
+config/baseline_reference.npy
+config/alignment_reference.npy

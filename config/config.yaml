@@ -1,0 +1,163 @@
+# ==============================================================================
+# capper-monitor 設定ファイル
+# 現場での調整はこのファイルを直接編集してください。
+# 編集後は `python -m capper_monitor --config config/config.yaml --check-config`
+# で構文・値のチェックを行ってから `systemctl restart capper-monitor` してください。
+# ==============================================================================
+
+camera:
+  # "opencv"    : USBウェブカメラ (cv2.VideoCapture)
+  # "picamera2" : ラズパイ純正CSIカメラモジュール (picamera2)
+  backend: opencv
+
+  opencv:
+    device_index: 0
+    width: 1280
+    height: 720
+    fourcc: MJPG        # USBカメラのスループット向上用。相性が悪ければ空文字にする
+
+  picamera2:
+    width: 1280
+    height: 720
+    auto_exposure: false      # 基準差分方式の安定のため自動露出はOFF推奨
+    auto_white_balance: false # 同上、自動ホワイトバランスもOFF推奨
+    # AWBのアルゴリズムモード。"auto"（汎用グレーワールド系）はシーンの色が
+    # 偏っていると補正を誤ることがある（実機検証で黄色みが残る事例あり）。
+    # 現場の照明に合わせて "tungsten"/"fluorescent"/"indoor"/"daylight"/"cloudy"
+    # から一番自然に見えるものを選ぶとよい。選び方: `rpicam-hello -t 0 --awb <mode>`
+    # で見比べてから、良かったものをここに設定する。
+    awb_mode: auto
+    # auto_exposure/auto_white_balanceをfalseにした場合、起動直後に一時的に
+    # 自動調整を働かせてから、その収束値で固定する（単純にOFFにすると起動直後の
+    # 暗すぎる/色がおかしい暫定値のまま固定されてしまうため）。収束待ち時間(秒)。
+    ae_awb_convergence_s: 1.5
+    # Camera Module 3系（オートフォーカス搭載）向けの設定。IMX219等AF非搭載の
+    # センサーでは自動的に無視される。
+    # "auto"（既定・推奨）: 起動時に1回だけAFを実行し、以後はその位置で固定する
+    # "manual": lens_positionで指定した位置に固定する（現場で最適値が分かっている場合）
+    # "continuous": 連続AFのまま動かす（非推奨。稼働中の再フォーカスで映像が
+    #               一瞬ボケ、baseline_diff方式の誤検知要因になりうる）
+    autofocus_mode: auto
+    # lens_position: 5.0   # autofocus_mode: manual のときのみ使用（ディオプター値）
+
+detection:
+  # "color_mask" (既定・白キャップ＋赤ライン向け): ROI内の「指定色（赤）」の画素の割合で
+  #                 判定する。白いキャップは彩度が低いので赤と確実に区別できる。
+  #                 基準フレーム撮影は不要。
+  # "baseline_diff" : 「ラインが見えていない」基準画像との差分で、新しく現れた輪郭を検知する。
+  #                 ライン露出で輪郭が"増える"現場向け。キャップがぎっしり写る（輪郭が多い）
+  #                 現場では満杯時の方が輪郭が多くなるため使えない。
+  # "edge_density"  : Cannyエッジ密度の絶対しきい値方式。baseline未取得時のフォールバック。
+  strategy: color_mask
+  fallback_strategy: edge_density
+
+  # ライン検知の対象領域（ROI）。フレームに対する比率(0.0〜1.0)で指定するため、
+  # カメラの解像度を変えても再現できる。scripts/calibrate.py で視覚的に調整すること。
+  roi:
+    x: 0.35
+    y: 0.40
+    w: 0.30
+    h: 0.20
+
+  baseline_diff:
+    num_calibration_frames: 15   # 基準画像作成時に撮影する枚数（中央値を基準とする）
+    dilate_kernel: 3             # 微振動・画角ズレ吸収のためのエッジ膨張カーネル（奇数）
+    canny_low: 50
+    canny_high: 150
+    blur_kernel: 5               # 奇数
+    density_threshold: 0.05      # 基準との差分エッジ密度がこの比率を超えたら「ライン検知」
+    reference_path: config/baseline_reference.npy
+
+  edge_density:
+    canny_low: 50
+    canny_high: 150
+    blur_kernel: 5                 # 奇数
+    density_threshold: 0.08
+    adaptive: true                  # ROI内の輝度中央値からCanny閾値を動的補正する
+
+  # 色マスク方式の設定（OpenCVのHSV: 色相H 0〜180 / 彩度S 0〜255 / 明度V 0〜255）。
+  # 赤は色相が0と180の両端にまたがるため、hsv_lowerの色相 > hsv_upperの色相 と書くと
+  # 「170〜180 と 0〜10」のように一周をまたぐ範囲として扱う。
+  # 彩度(S)の下限80で白（低彩度）を除外し、明度(V)の下限60で暗すぎる影を除外する。
+  color_mask:
+    hsv_lower: [170, 80, 60]
+    hsv_upper: [10, 255, 255]
+    pixel_ratio_threshold: 0.02   # ROI内の赤の割合がこれ以上で「ライン検知」。スマホの調整画面で
+                                  # 満杯時とライン露出時のスコアの間の値に合わせる
+
+  debounce:
+    on_delay_ms: 500     # ラインが継続してこの時間見え続けたらアラームON
+    off_delay_ms: 1000    # ラインが継続してこの時間見えなくなったらアラームOFF
+
+  alignment_check:
+    enabled: true
+    roi:                  # 常に静止しているはずの背景領域（ROIとは別の場所を指定）
+      x: 0.02
+      y: 0.02
+      w: 0.15
+      h: 0.15
+    correlation_threshold: 0.6   # 基準画像との相関がこれを下回ったら検知エラー扱い
+
+  refill_detection:
+    enabled: true
+    motion_threshold: 25    # フレーム間差分の画素値しきい値(0-255)
+    motion_ratio: 0.05      # 動きありと判定する変化画素の比率
+    blink_interval_ms: 400  # キャップ投入中の点滅周期（片側、ON/OFF各このms）
+
+gpio:
+  # "lgpio" : ラズパイ5実機（RP1 GPIOチップ対応）
+  # "mock"  : 実機なしでのベンチテスト・CI用
+  pin_factory: lgpio
+  # 40ピンヘッダのGPIOチップ番号。"auto"（既定・推奨）はラベル（Pi 5なら pinctrl-rp1）で
+  # 自動判定する。Pi 5のチップ番号はOSの版によって 0 / 4 / 10番台 などに変わるため、
+  # 通常は auto のままにする。自動判定できない場合のみ `gpiodetect` の結果を見て番号を書く。
+  chip: auto
+
+  alarm_output:
+    pin: 17
+    active_high: true    # 絶縁モジュール（PhotoMOS/SSR）の出力極性に合わせて設定すること
+
+  reset_button:            # 物理リセットボタン（ラズパイの3.3Vドメイン内で完結、絶縁不要）
+    pin: 27
+    pull_up: true           # GPIO-GND間のボタン、内部プルアップ使用
+    bounce_time_ms: 200
+
+  plc_reset_input:          # PLCからのリセット信号（絶縁DC入力モジュール経由）
+    pin: 22
+    pull_up: true            # 絶縁モジュールの出力極性に合わせて設定すること
+    bounce_time_ms: 50
+
+  # カメラ異常を専用出力で通知したい場合のみ設定する（任意、未設定ならログのみ）
+  # fault_output:
+  #   pin: 23
+  #   active_high: true
+
+app:
+  loop_interval_ms: 100
+  lock_file_path: /tmp/capper-monitor.lock
+  watchdog_enabled: true    # systemd の WatchdogSec と連携するハートビート送信
+
+  camera_retry:
+    initial_backoff_ms: 200
+    max_backoff_ms: 5000
+    fault_after_failures: 20   # 連続失敗がこの回数を超えたらCRITICALログ＋fault_output ON
+
+web:
+  enabled: false     # スマホ監視ページを使う場合のみ true にする
+  host: 0.0.0.0
+  port: 8080
+  stream_width: 640    # 検知用より低解像度・低フレームレートにしてPi負荷を抑える
+  stream_height: 360
+  stream_fps: 8
+  jpeg_quality: 70
+  # スマホの調整画面（http://<ラズパイのIP>:8080/calibrate）からROI・基準フレーム・
+  # しきい値を変更・保存できるようにする。現場での調整が終わったら false にして、
+  # Wi-Fiにつないだ人が設定を変えられないようにすることを推奨。
+  calibration_enabled: true
+
+logging:
+  level: INFO         # 現場調整時のみ DEBUG に変更する
+  console: true
+  file_path: /var/log/capper-monitor/capper-monitor.log
+  max_bytes: 1048576
+  backup_count: 3
