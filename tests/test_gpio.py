@@ -1,5 +1,13 @@
 from capper_monitor.config import GpioConfig, GpioInputConfig, GpioOutputConfig
-from capper_monitor.io.gpio import AlarmOutput, DebouncedInput, create_gpio_resources
+import pytest
+
+from capper_monitor.io.gpio import (
+    AlarmOutput,
+    DebouncedInput,
+    GpioChipNotFoundError,
+    create_gpio_resources,
+    find_gpio_chip,
+)
 
 
 def test_alarm_output_starts_off_and_can_be_toggled(mock_pin_factory):
@@ -67,3 +75,35 @@ def test_create_gpio_resources_with_fault_output(mock_pin_factory):
         assert resources.fault_output.is_on is False
     finally:
         resources.close()
+
+
+# --- GPIOチップの自動判定（実機の /dev/gpiochip* の代わりに偽のラベル表を渡す） ---
+
+# 実機（Raspberry Pi 5）で gpiochip0/4 が無く 11〜15 のみだった構成を模す（どれがRP1かは仮の割当て）
+PI5_CHIPS_11_TO_15 = {
+    11: "gpio-brcmstb@107d508500",
+    12: "gpio-brcmstb@107d508520",
+    13: "pinctrl-rp1",
+    14: "gpio-brcmstb@107d517c00",
+    15: "gpio-brcmstb@107d517c20",
+}
+
+
+def test_find_gpio_chip_picks_rp1_regardless_of_number():
+    assert find_gpio_chip(PI5_CHIPS_11_TO_15, PI5_CHIPS_11_TO_15.get) == (13, "pinctrl-rp1")
+
+
+def test_find_gpio_chip_falls_back_to_bcm_on_older_pi():
+    chips = {0: "pinctrl-bcm2711", 1: "raspberrypi-exp-gpio"}
+    assert find_gpio_chip(chips, chips.get) == (0, "pinctrl-bcm2711")
+
+
+def test_find_gpio_chip_ignores_chips_that_cannot_be_opened():
+    chips = {0: None, 4: "pinctrl-rp1"}
+    assert find_gpio_chip(chips, chips.get) == (4, "pinctrl-rp1")
+
+
+def test_find_gpio_chip_raises_with_found_labels_when_no_header_chip():
+    chips = {11: "gpio-brcmstb@107d508500"}
+    with pytest.raises(GpioChipNotFoundError, match="gpiochip11"):
+        find_gpio_chip(chips, chips.get)

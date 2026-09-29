@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import yaml
 
@@ -261,6 +261,7 @@ class GpioInputConfig:
 @dataclass(frozen=True)
 class GpioConfig:
     pin_factory: str = "lgpio"
+    chip: Union[str, int] = "auto"
     alarm_output: GpioOutputConfig = field(default_factory=lambda: GpioOutputConfig(pin=17))
     reset_button: GpioInputConfig = field(default_factory=lambda: GpioInputConfig(pin=27, bounce_time_ms=200))
     plc_reset_input: GpioInputConfig = field(default_factory=lambda: GpioInputConfig(pin=22, bounce_time_ms=50))
@@ -269,6 +270,8 @@ class GpioConfig:
     def validate(self) -> None:
         if self.pin_factory not in ("lgpio", "mock"):
             raise ConfigError(f"gpio.pin_factory は 'lgpio' か 'mock' である必要があります: {self.pin_factory!r}")
+        if self.chip != "auto" and not (isinstance(self.chip, int) and not isinstance(self.chip, bool) and self.chip >= 0):
+            raise ConfigError(f"gpio.chip は 'auto' か0以上の整数で指定してください: {self.chip!r}")
         self.reset_button.validate("gpio.reset_button")
         self.plc_reset_input.validate("gpio.plc_reset_input")
 
@@ -520,6 +523,7 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
 
     gpio = GpioConfig(
         pin_factory=gpio_raw.get("pin_factory", "lgpio"),
+        chip=gpio_raw.get("chip", "auto"),
         alarm_output=GpioOutputConfig(
             pin=int(_get(alarm_raw, "pin", "gpio.alarm_output")),
             active_high=bool(alarm_raw.get("active_high", True)),

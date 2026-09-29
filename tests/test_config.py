@@ -229,3 +229,21 @@ def test_reference_path_resolved_relative_to_config_file_not_cwd(tmp_path, monke
 
     config = load_config(path)
     assert config.detection.baseline_diff.reference_path == str(subdir / "baseline_reference.npy")
+
+
+def test_gpio_chip_defaults_to_auto():
+    assert load_config(DEFAULT_CONFIG_PATH).gpio.chip == "auto"
+
+
+def test_gpio_chip_accepts_explicit_number(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("gpio:\n  chip: 13\n", encoding="utf-8")
+    assert load_config(path).gpio.chip == 13
+
+
+@pytest.mark.parametrize("value", ["-1", "rp1", "true"])
+def test_gpio_chip_invalid_value_raises(tmp_path, value):
+    path = tmp_path / "config.yaml"
+    path.write_text(f"gpio:\n  chip: {value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)

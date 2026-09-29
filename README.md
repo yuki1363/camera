@@ -72,6 +72,22 @@
 | PLCリセット入力 | 22 | 絶縁DC入力モジュール経由 |
 | カメラ異常出力（任意） | 未設定 | `gpio.fault_output` で有効化可能 |
 
+#### `lgpio.error: 'can not open gpiochip'` が出る場合
+
+ラズパイ5のGPIOチップ番号はOS・カーネルの版で変わります（`/dev/gpiochip0`、`4`、`11`〜`15` など）。
+gpiozeroは番号を省略すると0か4を開くため、それ以外の番号しかないOSでは権限に問題がなくても
+このエラーになります。本システムは `gpio.chip: auto`（既定）でラベル `pinctrl-rp1` のチップを
+自動で探し、起動ログに「GPIOチップ gpiochipNN (pinctrl-rp1) を使用します」と出します。
+
+自動判定できない場合は、各チップのラベルを表示して `pinctrl-rp1` の番号を `gpio.chip` に書いてください。
+
+```bash
+for c in /dev/gpiochip*; do python3 -c "import lgpio,sys;h=lgpio.gpiochip_open(int(sys.argv[1]));print(sys.argv[1],lgpio.gpio_get_chip_info(h));lgpio.gpiochip_close(h)" ${c#/dev/gpiochip}; done
+```
+
+権限が原因の場合（`ls -l /dev/gpiochip*` のグループが `gpio` で、`groups` に `gpio` が無い）は、
+`sudo usermod -aG gpio $USER` のあと再ログインしてください。
+
 ## セットアップ
 
 ```bash

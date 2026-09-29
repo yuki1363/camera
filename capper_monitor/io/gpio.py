@@ -1,15 +1,80 @@
 from __future__ import annotations
 
-from typing import Optional
+import glob
+import logging
+import re
+from typing import Callable, Iterable, Optional, Union
 
 from gpiozero import Button, DigitalOutputDevice
 
+logger = logging.getLogger(__name__)
 
-def build_pin_factory(name: str):
+# 40ピンヘッダのGPIOを持つチップのラベル（優先順）。Pi 5はRP1、Pi 4以前はBCM。
+_HEADER_CHIP_LABELS = ("pinctrl-rp1", "pinctrl-bcm2711", "pinctrl-bcm2835")
+
+
+class GpioChipNotFoundError(RuntimeError):
+    pass
+
+
+def find_gpio_chip(chip_numbers: Iterable[int], get_label: Callable[[int], Optional[str]]) -> tuple[int, str]:
+    """ラベルで40ピンヘッダのGPIOチップを探す。
+
+    ラズパイ5のチップ番号はOS・カーネルの版で変わる（0, 4, 10番台など）ため、
+    番号を決め打ちせずラベルで判定する。get_label が None を返すチップ（開けない等）は無視する。
+    """
+    labels = {}
+    for number in sorted(chip_numbers):
+        label = get_label(number)
+        if label is not None:
+            labels[number] = label
+    for wanted in _HEADER_CHIP_LABELS:
+        for number, label in labels.items():
+            if label == wanted:
+                return number, label
+    found = ", ".join(f"gpiochip{n}={label!r}" for n, label in labels.items()) or "なし"
+    raise GpioChipNotFoundError(
+        "40ピンヘッダのGPIOチップが見つかりません（見つかったチップ: "
+        f"{found}）。`gpiodetect` の結果を確認し、config.yaml の gpio.chip に番号を指定してください。"
+    )
+
+
+def _list_chip_numbers() -> list[int]:
+    numbers = []
+    for path in glob.glob("/dev/gpiochip*"):
+        m = re.fullmatch(r"/dev/gpiochip(\d+)", path)
+        if m:
+            numbers.append(int(m.group(1)))
+    return numbers
+
+
+def _read_chip_label(number: int) -> Optional[str]:
+    import lgpio
+
+    try:
+        handle = lgpio.gpiochip_open(number)
+    except lgpio.error:
+        return None
+    try:
+        _status, _lines, _name, label = lgpio.gpio_get_chip_info(handle)
+        return label
+    except lgpio.error:
+        return None
+    finally:
+        lgpio.gpiochip_close(handle)
+
+
+def build_pin_factory(name: str, chip: Union[str, int] = "auto"):
     if name == "lgpio":
         from gpiozero.pins.lgpio import LGPIOFactory
 
-        return LGPIOFactory()
+        if chip == "auto":
+            number, label = find_gpio_chip(_list_chip_numbers(), _read_chip_label)
+            logger.info("GPIOチップ gpiochip%d (%s) を使用します", number, label)
+        else:
+            number = int(chip)
+            logger.info("GPIOチップ gpiochip%d を使用します（gpio.chip で指定）", number)
+        return LGPIOFactory(chip=number)
     if name == "mock":
         from gpiozero.pins.mock import MockFactory
 
@@ -89,7 +154,7 @@ class GpioResources:
 
 def create_gpio_resources(gpio_config, pin_factory=None) -> GpioResources:
     if pin_factory is None:
-        pin_factory = build_pin_factory(gpio_config.pin_factory)
+        pin_factory = build_pin_factory(gpio_config.pin_factory, gpio_config.chip)
 
     alarm_output = AlarmOutput(
         gpio_config.alarm_output.pin, gpio_config.alarm_output.active_high, pin_factory=pin_factory

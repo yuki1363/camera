@@ -108,6 +108,10 @@ gpio:
   # "lgpio" : ラズパイ5実機（RP1 GPIOチップ対応）
   # "mock"  : 実機なしでのベンチテスト・CI用
   pin_factory: lgpio
+  # 40ピンヘッダのGPIOチップ番号。"auto"（既定・推奨）はラベル（Pi 5なら pinctrl-rp1）で
+  # 自動判定する。Pi 5のチップ番号はOSの版によって 0 / 4 / 10番台 などに変わるため、
+  # 通常は auto のままにする。自動判定できない場合のみ `gpiodetect` の結果を見て番号を書く。
+  chip: auto
 
   alarm_output:
     pin: 17
