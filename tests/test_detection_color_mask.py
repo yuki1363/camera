@@ -167,3 +167,53 @@ def test_learn_range_rejects_a_mixed_sample():
     mixed[:, :20] = (200, 30, 30)  # 赤と青が半分ずつ
     with pytest.raises(ValueError):
         learn_hsv_range(mixed)
+
+
+# --- 映り込み・点状ノイズを数えない ---
+
+def scattered_red_dots(frame):
+    """ROI内に赤い点（2x2）を多数散らす。合計はしきい値を超えるが、まとまりはない。"""
+    x0, y0, x1, y1 = ROI.to_pixels(frame.shape)
+    for y in range(y0 + 1, y1 - 2, 5):
+        for x in range(x0 + 1, x1 - 2, 5):
+            frame[y:y + 2, x:x + 2] = (20, 20, 210)
+    return frame
+
+
+def make_clean_detector(open_kernel=3, min_blob_ratio=0.002):
+    return ColorMaskDetector(
+        roi=ROI, hsv_lower=WRAP_LOWER, hsv_upper=WRAP_UPPER, pixel_ratio_threshold=0.05,
+        open_kernel=open_kernel, min_blob_ratio=min_blob_ratio,
+    )
+
+
+def test_scattered_reflection_dots_are_not_counted():
+    frame = scattered_red_dots(make_frame(color=WHITE_BGR))
+    assert make_clean_detector(0, 0.0).detect(frame).line_visible is True  # 従来は誤検知
+    result = make_clean_detector().detect(frame)
+    assert result.line_visible is False
+    assert result.score == 0.0
+
+
+def test_tape_band_is_still_detected_with_cleanup():
+    frame = make_frame(color=WHITE_BGR)
+    x0, y0, x1, y1 = ROI.to_pixels(frame.shape)
+    cy = (y0 + y1) // 2
+    cv2.rectangle(frame, (x0, cy - 4), (x1, cy + 4), RED_LOW_HUE_BGR, -1)
+    assert make_clean_detector().detect(frame).line_visible is True
+
+
+def test_mask_view_uses_the_cleaned_mask():
+    frame = scattered_red_dots(make_frame(color=WHITE_BGR))
+    x0, y0, x1, y1 = ROI.to_pixels(frame.shape)
+    assert np.count_nonzero(make_clean_detector().mask_of(frame[y0:y1, x0:x1])) == 0
+
+
+def test_learned_value_lower_bound_tolerates_darker_lighting():
+    sample = make_frame(40, 40, color=(30, 30, 200))
+    lower, upper = learn_hsv_range(sample)
+    detector = ColorMaskDetector(roi=ROI, hsv_lower=lower, hsv_upper=upper, pixel_ratio_threshold=0.1)
+    darker = make_frame(color=WHITE_BGR)
+    x0, y0, x1, y1 = ROI.to_pixels(darker.shape)
+    cv2.rectangle(darker, (x0, y0), (x1, y1), (17, 17, 115), -1)  # 照明が約6割に暗くなったテープ
+    assert detector.detect(darker).line_visible is True

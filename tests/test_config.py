@@ -290,3 +290,25 @@ def test_negative_motion_stabilizer_raises(tmp_path):
     path.write_text("detection:\n  refill_detection:\n    motion_hold_ms: -1\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_stability_settings_defaults():
+    d = load_config(DEFAULT_CONFIG_PATH).detection
+    assert (d.color_mask.open_kernel, d.color_mask.min_blob_ratio) == (3, 0.002)
+    assert (d.score_filter.window_frames, d.score_filter.release_ratio) == (5, 0.6)
+
+
+@pytest.mark.parametrize(
+    "yaml_text",
+    [
+        "detection:\n  score_filter:\n    window_frames: 0\n",
+        "detection:\n  score_filter:\n    release_ratio: 1.5\n",
+        "detection:\n  color_mask:\n    open_kernel: -1\n",
+        "detection:\n  color_mask:\n    min_blob_ratio: 1.0\n",
+    ],
+)
+def test_invalid_stability_settings_raise(tmp_path, yaml_text):
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)

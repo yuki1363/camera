@@ -103,6 +103,18 @@ class CameraConfig:
 
 
 @dataclass(frozen=True)
+class ScoreFilterConfig:
+    window_frames: int = 5      # 直近このフレーム数のスコアの中央値で判定（1で無効）
+    release_ratio: float = 0.6  # 「見える」から戻るしきい値 = しきい値 × この値（1.0で無効）
+
+    def validate(self) -> None:
+        if self.window_frames < 1:
+            raise ConfigError("detection.score_filter.window_frames は1以上で指定してください")
+        if not (0.0 < self.release_ratio <= 1.0):
+            raise ConfigError("detection.score_filter.release_ratio は0より大きく1以下で指定してください")
+
+
+@dataclass(frozen=True)
 class DebounceConfig:
     on_delay_ms: int = 500
     off_delay_ms: int = 1000
@@ -142,8 +154,14 @@ class ColorMaskConfig:
     hsv_lower: tuple = (0, 0, 200)
     hsv_upper: tuple = (180, 40, 255)
     pixel_ratio_threshold: float = 0.10
+    open_kernel: int = 3
+    min_blob_ratio: float = 0.002
 
     def validate(self) -> None:
+        if self.open_kernel < 0:
+            raise ConfigError("detection.color_mask.open_kernel は0以上で指定してください")
+        if not (0.0 <= self.min_blob_ratio < 1.0):
+            raise ConfigError("detection.color_mask.min_blob_ratio は0以上1未満で指定してください")
         if len(self.hsv_lower) != 3 or len(self.hsv_upper) != 3:
             raise ConfigError("detection.color_mask.hsv_lower/hsv_upper は3要素である必要があります")
         for name, values in (("hsv_lower", self.hsv_lower), ("hsv_upper", self.hsv_upper)):
@@ -227,6 +245,7 @@ class DetectionConfig:
     color_mask: ColorMaskConfig = field(default_factory=ColorMaskConfig)
     baseline_diff: BaselineDiffConfig = field(default_factory=BaselineDiffConfig)
     debounce: DebounceConfig = field(default_factory=DebounceConfig)
+    score_filter: ScoreFilterConfig = field(default_factory=ScoreFilterConfig)
     alignment_check: AlignmentCheckConfig = field(default_factory=AlignmentCheckConfig)
     refill_detection: RefillDetectionConfig = field(default_factory=RefillDetectionConfig)
 
@@ -241,6 +260,7 @@ class DetectionConfig:
         self.color_mask.validate()
         self.baseline_diff.validate()
         self.debounce.validate()
+        self.score_filter.validate()
         self.alignment_check.validate()
         self.refill_detection.validate()
 
@@ -473,6 +493,8 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
         hsv_lower=tuple(cm_raw.get("hsv_lower", [0, 0, 200])),
         hsv_upper=tuple(cm_raw.get("hsv_upper", [180, 40, 255])),
         pixel_ratio_threshold=float(cm_raw.get("pixel_ratio_threshold", 0.10)),
+        open_kernel=int(cm_raw.get("open_kernel", 3)),
+        min_blob_ratio=float(cm_raw.get("min_blob_ratio", 0.002)),
     )
 
     bd_raw = _as_dict(detection_raw.get("baseline_diff", {}), "detection.baseline_diff")
@@ -492,6 +514,12 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
     debounce = DebounceConfig(
         on_delay_ms=int(debounce_raw.get("on_delay_ms", 500)),
         off_delay_ms=int(debounce_raw.get("off_delay_ms", 1000)),
+    )
+
+    sf_raw = _as_dict(detection_raw.get("score_filter", {}), "detection.score_filter")
+    score_filter = ScoreFilterConfig(
+        window_frames=int(sf_raw.get("window_frames", 5)),
+        release_ratio=float(sf_raw.get("release_ratio", 0.6)),
     )
 
     ac_raw = _as_dict(detection_raw.get("alignment_check", {}), "detection.alignment_check")
@@ -527,6 +555,7 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
         color_mask=color_mask,
         baseline_diff=baseline_diff,
         debounce=debounce,
+        score_filter=score_filter,
         alignment_check=alignment_check,
         refill_detection=refill_detection,
     )

@@ -43,6 +43,9 @@ detection:
   debounce:
     on_delay_ms: 0
     off_delay_ms: 0
+  score_filter:          # 1フレームごとの配線を確かめるため、ならしは無効にする
+    window_frames: 1
+    release_ratio: 1.0
   alignment_check:
     enabled: false
   refill_detection:

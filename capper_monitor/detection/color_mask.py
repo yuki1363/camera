@@ -24,11 +24,18 @@ class ColorMaskDetector(DetectionStrategy):
         hsv_lower,
         hsv_upper,
         pixel_ratio_threshold: float,
+        open_kernel: int = 0,
+        min_blob_ratio: float = 0.0,
     ):
         self._roi = roi
         self._hsv_lower = np.array(hsv_lower, dtype=np.uint8)
         self._hsv_upper = np.array(hsv_upper, dtype=np.uint8)
         self._pixel_ratio_threshold = pixel_ratio_threshold
+        # 映り込み・ノイズ対策。open_kernel で点状の画素を消し、min_blob_ratio 未満の小さな塊を捨てる
+        self._open_kernel = (
+            cv2.getStructuringElement(cv2.MORPH_RECT, (open_kernel, open_kernel)) if open_kernel > 1 else None
+        )
+        self._min_blob_ratio = min_blob_ratio
 
     @property
     def threshold(self) -> float:
@@ -48,7 +55,21 @@ class ColorMaskDetector(DetectionStrategy):
 
     def mask_of(self, bgr: np.ndarray) -> np.ndarray:
         """画像のうち、設定した色の範囲に入る画素を255にしたマスクを返す（画面表示用）。"""
-        return self._mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV))
+        return self._clean(self._mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)))
+
+    def _clean(self, mask: np.ndarray) -> np.ndarray:
+        """散らばった点（塩ビ板の映り込み・ノイズ）を消し、まとまった帯（テープ）だけを残す。"""
+        if mask.size == 0:
+            return mask
+        if self._open_kernel is not None:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._open_kernel)
+        if self._min_blob_ratio > 0:
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+            min_area = self._min_blob_ratio * mask.size
+            keep = np.zeros(count, dtype=bool)
+            keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= min_area
+            mask = np.where(keep[labels], 255, 0).astype(np.uint8)
+        return mask
 
     def _mask(self, hsv: np.ndarray) -> np.ndarray:
         lower, upper = self._hsv_lower, self._hsv_upper
@@ -61,7 +82,7 @@ class ColorMaskDetector(DetectionStrategy):
     def detect(self, frame: np.ndarray) -> DetectionResult:
         roi_img = self._roi.crop(frame)
         hsv = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
-        mask = self._mask(hsv)
+        mask = self._clean(self._mask(hsv))
         ratio = float(np.count_nonzero(mask)) / mask.size if mask.size else 0.0
         return DetectionResult(
             line_visible=ratio >= self._pixel_ratio_threshold,
@@ -73,6 +94,7 @@ class ColorMaskDetector(DetectionStrategy):
 # 見本の色から範囲を作るときの余裕（色相・彩度・明度）。照明の揺れ・影を吸収する
 _HUE_MARGIN = 6
 _SV_LOWER_SCALE = 0.75
+_V_LOWER_SCALE = 0.35
 
 
 def learn_hsv_range(sample_bgr: np.ndarray):
@@ -96,5 +118,6 @@ def learn_hsv_range(sample_bgr: np.ndarray):
     lower_h = (h_lo - 90) % 180
     upper_h = (h_hi - 90) % 180
     s_lo = max(40, int(np.percentile(colored[:, 1], 5) * _SV_LOWER_SCALE))
-    v_lo = max(40, int(np.percentile(colored[:, 2], 5) * _SV_LOWER_SCALE))
+    # 明度は照明で大きく変わるので広めに許す（判定は主に色相と彩度で行う）
+    v_lo = max(30, int(np.percentile(colored[:, 2], 5) * _V_LOWER_SCALE))
     return (lower_h, s_lo, v_lo), (upper_h, 255, 255)

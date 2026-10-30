@@ -38,6 +38,8 @@ def create_strategy(name: str, cfg: DetectionConfig, load_reference: bool = True
             hsv_lower=c.hsv_lower,
             hsv_upper=c.hsv_upper,
             pixel_ratio_threshold=c.pixel_ratio_threshold,
+            open_kernel=c.open_kernel,
+            min_blob_ratio=c.min_blob_ratio,
         )
     if name == "baseline_diff":
         c = cfg.baseline_diff

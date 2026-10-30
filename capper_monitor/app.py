@@ -26,6 +26,7 @@ from capper_monitor.detection.factory import (
 )
 from capper_monitor.detection.motion import MotionResult
 from capper_monitor.detection.roi import RoiFractional
+from capper_monitor.detection.score_filter import ScoreFilter
 from capper_monitor.io.gpio import GpioResources, create_gpio_resources
 from capper_monitor.logging_setup import log_event
 from capper_monitor.runtime import SingletonLock, WatchdogNotifier
@@ -42,6 +43,9 @@ _MOTION_PEAK_WINDOW_S = 5.0
 # 静止時の動き量の最大値に対する、自動設定しきい値の倍率と下限
 _MOTION_AUTO_FACTOR = 2.0
 _MOTION_AUTO_MIN = 0.02
+
+# スマホ画面に出す「直近のスコアの最小〜最大」の期間（秒）。しきい値を決める目安
+_SCORE_RANGE_WINDOW_S = 60.0
 
 _POWEROFF_COMMAND = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]
 
@@ -98,6 +102,11 @@ class App:
         self._last_motion: MotionResult = _NO_MOTION
         self._motion_history: deque = deque()
         self._show_mask = False
+        sf = config.detection.score_filter
+        self.score_filter = ScoreFilter(sf.window_frames, sf.release_ratio)
+        self._last_raw_score: Optional[float] = None
+        self._release_threshold: Optional[float] = None
+        self._score_history: deque = deque()
         self._roi_hsv: Optional[list] = None
 
     def run(self, install_signal_handlers: bool = True) -> None:
@@ -169,7 +178,17 @@ class App:
             self._publish(frame, "detection_error")
             return
         self._clear_detection_error()
-        self._last_score = detection_result.score
+        threshold = getattr(self.detector, "threshold", None)
+        if threshold is not None:
+            filtered = self.score_filter.update(detection_result.score, threshold)
+            line_visible = filtered.line_visible
+            self._last_score = filtered.score
+            self._release_threshold = filtered.release_threshold
+        else:
+            line_visible = detection_result.line_visible
+            self._last_score = detection_result.score
+        self._last_raw_score = detection_result.score
+        self._record_score(detection_result.score, now)
         if isinstance(self.detector, ColorMaskDetector):
             self._roi_hsv = _median_hsv(self._detection_cfg.roi, frame)
 
@@ -177,7 +196,7 @@ class App:
         self._record_motion(motion_result, now)
 
         result = self.state_machine.update(
-            raw_line_visible=detection_result.line_visible,
+            raw_line_visible=line_visible,
             motion_detected=motion_result.motion_detected,
             reset_requested=reset_requested,
             now=now,
@@ -232,6 +251,16 @@ class App:
         while self._motion_history and now - self._motion_history[0][0] > _MOTION_PEAK_WINDOW_S:
             self._motion_history.popleft()
 
+    def _record_score(self, score: float, now: float) -> None:
+        self._score_history.append((now, score))
+        while self._score_history and now - self._score_history[0][0] > _SCORE_RANGE_WINDOW_S:
+            self._score_history.popleft()
+
+    def _reset_score_tracking(self) -> None:
+        """ROI・しきい値・色・検知器を変えたら、変更前のスコアを判定や表示に混ぜない。"""
+        self.score_filter.clear()
+        self._score_history.clear()
+
     def _motion_peak(self) -> float:
         return max((ratio for _, ratio in self._motion_history), default=0.0)
 
@@ -252,6 +281,10 @@ class App:
             reason=reason,
             timestamp=time.time(),
             score=self._last_score,
+            score_raw=self._last_raw_score,
+            score_min_60s=min((s for _, s in self._score_history), default=None),
+            score_max_60s=max((s for _, s in self._score_history), default=None),
+            release_threshold=self._release_threshold,
             threshold=getattr(self.detector, "threshold", None),
             detector=getattr(self.detector, "strategy_name", type(self.detector).__name__),
             configured_strategy=cfg.strategy,
@@ -362,6 +395,7 @@ class App:
         except ValueError as exc:
             raise CalibrationError(str(exc)) from exc
         self.detector.set_hsv_range(lower, upper)
+        self._reset_score_tracking()
         cm = replace(self._detection_cfg.color_mask, hsv_lower=lower, hsv_upper=upper)
         self._detection_cfg = replace(self._detection_cfg, color_mask=cm)
         score = self.detector.detect(frame).score
@@ -407,6 +441,7 @@ class App:
         self._detection_cfg = replace(self._detection_cfg, roi=roi)
         # 保存済みの基準画像は旧ROIのサイズなので読み込まない
         self.detector = create_detector(self._detection_cfg, load_reference=False)
+        self._reset_score_tracking()
         log_event(logger, logging.INFO, "calibration_roi_updated", x=f"{x:.3f}", y=f"{y:.3f}", w=f"{w:.3f}", h=f"{h:.3f}")
         message = "ROIを更新しました。"
         if self._detection_cfg.strategy == "baseline_diff":
@@ -419,6 +454,7 @@ class App:
         name = self.detector.strategy_name
         self._detection_cfg = with_threshold(self._detection_cfg, name, value)
         self.detector.threshold = value
+        self._reset_score_tracking()
         log_event(logger, logging.INFO, "calibration_threshold_updated", detector=name, value=f"{value:.4f}")
         return {"message": f"しきい値を {value:.4f} にしました（{_STRATEGY_LABELS.get(name, name)}）"}
 
@@ -437,6 +473,7 @@ class App:
         detector = create_strategy("baseline_diff", cfg, load_reference=False)
         detector.build_reference_from_frames(frames)
         self.detector = detector
+        self._reset_score_tracking()
         log_event(logger, logging.INFO, "calibration_baseline_captured", frames=len(frames))
         return {"message": f"基準フレームを{len(frames)}枚撮影しました。「保存」で確定してください。"}
 

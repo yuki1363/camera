@@ -225,3 +225,32 @@ def test_mask_view_and_status_report_the_color_info(color_app):
     assert status["roi_hsv"] is not None and len(status["roi_hsv"]) == 3
     # 赤判定の表示は映像だけを変え、検知の結果には影響しない
     assert app.detector.detect(frame).score > 0.5
+
+
+def test_wobbling_score_near_threshold_does_not_flip_the_output(color_app):
+    """スコアがしきい値付近で上下しても、出力（PLCへの信号）が往復しないこと。"""
+    app, _ = color_app
+    app._handle_command("set_roi", make_frame(), x=0.2, y=0.3, w=0.6, h=0.5)
+
+    class FixedScore:
+        strategy_name = "color_mask"
+        threshold = 0.1
+
+        def __init__(self):
+            self.scores = iter([0.12] * 6 + [0.09, 0.11, 0.08, 0.10, 0.09, 0.11, 0.08] * 6)
+
+        def detect(self, frame):
+            from capper_monitor.detection.base import DetectionResult
+
+            s = next(self.scores)
+            return DetectionResult(line_visible=s >= 0.1, score=s, debug_frame=None)
+
+    app.detector = FixedScore()
+    outputs = []
+    for _ in range(6 + 7 * 6):
+        app._process_frame(make_frame())
+        outputs.append(app.gpio.alarm_output.is_on)
+    assert outputs[-30:] == [True] * 30
+    status = app.frame_buffer.get_status()
+    assert status["score_min_60s"] == 0.08 and status["score_max_60s"] == 0.12
+    assert abs(status["release_threshold"] - 0.06) < 1e-9
