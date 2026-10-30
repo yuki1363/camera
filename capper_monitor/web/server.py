@@ -96,6 +96,19 @@ def create_app(frame_buffer: FrameBuffer, web_config: WebConfig, commands=None) 
             return jsonify(ok=False, error="しきい値の指定が不正です"), 400
         return run_command("set_motion_ratio", value=value)
 
+    @app.route("/api/pick_color", methods=["POST"])
+    def api_pick_color():
+        body = request.get_json(silent=True) or {}
+        try:
+            values = {key: float(body[key]) for key in ("x", "y", "w", "h")}
+        except (KeyError, TypeError, ValueError):
+            return jsonify(ok=False, error="範囲の指定が不正です"), 400
+        return run_command("pick_color", **values)
+
+    @app.route("/api/toggle_mask", methods=["POST"])
+    def api_toggle_mask():
+        return run_command("toggle_mask")
+
     @app.route("/api/motion_auto", methods=["POST"])
     def api_motion_auto():
         return run_command("auto_motion_ratio")

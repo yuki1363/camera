@@ -17,6 +17,7 @@ from capper_monitor.calibration import CalibrationError, CommandQueue, save_cali
 from capper_monitor.camera.factory import create_camera
 from capper_monitor.config import AppConfig, ConfigError, RoiConfig
 from capper_monitor.detection.baseline_diff import BaselineDiffDetector
+from capper_monitor.detection.color_mask import ColorMaskDetector, learn_hsv_range
 from capper_monitor.detection.factory import (
     create_alignment_checker,
     create_detector,
@@ -96,6 +97,8 @@ class App:
         self._last_correlation: Optional[float] = None
         self._last_motion: MotionResult = _NO_MOTION
         self._motion_history: deque = deque()
+        self._show_mask = False
+        self._roi_hsv: Optional[list] = None
 
     def run(self, install_signal_handlers: bool = True) -> None:
         self._lock.acquire()
@@ -167,6 +170,8 @@ class App:
             return
         self._clear_detection_error()
         self._last_score = detection_result.score
+        if isinstance(self.detector, ColorMaskDetector):
+            self._roi_hsv = _median_hsv(self._detection_cfg.roi, frame)
 
         motion_result = self.motion_detector.detect(frame) if self.motion_detector is not None else _NO_MOTION
         self._record_motion(motion_result, now)
@@ -236,6 +241,7 @@ class App:
         web_cfg = self.config.web
         resized = cv2.resize(frame, (web_cfg.stream_width, web_cfg.stream_height))
         self._draw_overlay(resized)
+        self._draw_mask_view(resized)
         ok, buf = cv2.imencode(".jpg", resized, [int(cv2.IMWRITE_JPEG_QUALITY), web_cfg.jpeg_quality])
         if ok:
             self.frame_buffer.update_frame(buf.tobytes())
@@ -255,6 +261,11 @@ class App:
             calibration_enabled=self._calibration_enabled,
             shutdown_enabled=self._shutdown_enabled,
             roi={"x": cfg.roi.x, "y": cfg.roi.y, "w": cfg.roi.w, "h": cfg.roi.h},
+            color_hsv=list(self.detector.hsv_range[0]) + list(self.detector.hsv_range[1])
+            if isinstance(self.detector, ColorMaskDetector)
+            else None,
+            roi_hsv=self._roi_hsv,
+            show_mask=self._show_mask,
             motion_enabled=self.motion_detector is not None,
             motion_ratio=self._last_motion.ratio,
             motion_peak=self._motion_peak(),
@@ -262,6 +273,15 @@ class App:
             motion_detected=self._last_motion.motion_detected,
             motion_roi=_roi_dict(cfg.refill_detection.roi),
         )
+
+    def _draw_mask_view(self, image: np.ndarray) -> None:
+        """色マスク方式で「赤として数えている部分」を緑に塗って見せる（調整用）。"""
+        if not self._show_mask or not isinstance(self.detector, ColorMaskDetector):
+            return
+        x0, y0, x1, y1 = RoiFractional(*_roi_tuple(self._detection_cfg.roi)).to_pixels(image.shape)
+        region = image[y0:y1, x0:x1]
+        mask = self.detector.mask_of(region) > 0
+        region[mask] = (0.35 * region[mask] + 0.65 * np.array((0, 255, 0))).astype(np.uint8)
 
     def _draw_overlay(self, image: np.ndarray) -> None:
         cfg = self._detection_cfg
@@ -278,6 +298,8 @@ class App:
             "set_motion_roi": self._cmd_set_motion_roi,
             "set_motion_ratio": self._cmd_set_motion_ratio,
             "auto_motion_ratio": self._cmd_auto_motion_ratio,
+            "pick_color": self._cmd_pick_color,
+            "toggle_mask": self._cmd_toggle_mask,
             "capture_baseline": self._cmd_capture_baseline,
             "capture_alignment": self._cmd_capture_alignment,
             "save": self._cmd_save,
@@ -318,6 +340,39 @@ class App:
         self.motion_detector.motion_ratio = value
         log_event(logger, logging.INFO, "calibration_motion_ratio_updated", value=f"{value:.4f}")
         return {"message": f"動きのしきい値を {value:.4f} にしました。「保存」で確定してください。"}
+
+    def _cmd_toggle_mask(self, frame: np.ndarray) -> dict:
+        if not isinstance(self.detector, ColorMaskDetector):
+            raise CalibrationError("色マスク方式ではないため、赤判定の表示は使えません")
+        self._show_mask = not self._show_mask
+        return {"message": "赤として数えている部分を緑で表示します。" if self._show_mask else "赤判定の表示を消しました。"}
+
+    def _cmd_pick_color(self, frame: np.ndarray, x: float, y: float, w: float, h: float) -> dict:
+        """テープの上を囲んだ範囲の色から、検知する色の範囲を作り直す。"""
+        if not isinstance(self.detector, ColorMaskDetector):
+            raise CalibrationError("色マスク方式ではないため、色は登録できません")
+        roi = RoiConfig(x=x, y=y, w=w, h=h)
+        try:
+            roi.validate("範囲")
+        except ConfigError as exc:
+            raise CalibrationError(str(exc)) from exc
+        sample = RoiFractional(x, y, w, h).crop(frame)
+        try:
+            lower, upper = learn_hsv_range(sample)
+        except ValueError as exc:
+            raise CalibrationError(str(exc)) from exc
+        self.detector.set_hsv_range(lower, upper)
+        cm = replace(self._detection_cfg.color_mask, hsv_lower=lower, hsv_upper=upper)
+        self._detection_cfg = replace(self._detection_cfg, color_mask=cm)
+        score = self.detector.detect(frame).score
+        log_event(logger, logging.INFO, "calibration_color_picked", lower=list(lower), upper=list(upper))
+        return {
+            "message": (
+                f"テープの色を登録しました（色相 {lower[0]}〜{upper[0]}、彩度 {lower[1]}以上、明度 {lower[2]}以上）。"
+                f"今のスコアは {score:.4f} です。テープが見えないときのスコアが小さくなることを確認し、"
+                "「しきい値を適用」と「保存」を行ってください。"
+            )
+        }
 
     def _cmd_auto_motion_ratio(self, frame: np.ndarray) -> dict:
         """補充も人の出入りもしていない状態の動き量（直近5秒の最大）から、しきい値を決める。"""
@@ -414,6 +469,7 @@ class App:
             },
             motion_roi=cfg.refill_detection.roi,
             motion_ratio=cfg.refill_detection.motion_ratio,
+            color_hsv=(cfg.color_mask.hsv_lower, cfg.color_mask.hsv_upper),
         )
         log_event(logger, logging.INFO, "calibration_saved", path=self._config_path)
         return {"message": "保存しました。再起動後もこの設定で動作します。"}
@@ -504,3 +560,17 @@ def _run_poweroff() -> None:
     if result.returncode != 0:
         detail = (result.stderr or "").strip()
         raise CalibrationError(f"シャットダウンを実行できませんでした（{detail}）。{hint}")
+
+
+def _roi_tuple(roi) -> tuple:
+    return (roi.x, roi.y, roi.w, roi.h)
+
+
+def _median_hsv(roi_cfg, frame: np.ndarray) -> Optional[list]:
+    """ROI内の色の中央値（H,S,V）。赤が0/180をまたぐため、色相は90ずらして集計してから戻す。"""
+    crop = RoiFractional(*_roi_tuple(roi_cfg)).crop(frame)
+    if crop.size == 0:
+        return None
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    hue = (int(np.median((hsv[:, 0].astype(int) + 90) % 180)) - 90) % 180
+    return [hue, int(np.median(hsv[:, 1])), int(np.median(hsv[:, 2]))]

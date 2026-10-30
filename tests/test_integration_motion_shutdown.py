@@ -145,3 +145,83 @@ def test_auto_motion_ratio_needs_a_few_seconds_of_samples(app):
 def test_state_machine_gets_stabilizer_values_from_config(app):
     assert app.state_machine._motion_hold_s == 3.0
     assert app.state_machine._motion_enter_s == 0.5
+
+
+# --- 色マスク: テープの色の登録・赤判定の表示 ---
+
+import cv2  # noqa: E402
+
+# コード上の色マスク既定値は白用なので、実機のひな形と同じ赤の範囲を明示する
+COLOR_YAML = MOTION_YAML.replace("strategy: baseline_diff", "strategy: color_mask").replace(
+    "  baseline_diff:",
+    "  color_mask:\n    hsv_lower: [170, 80, 60]\n    hsv_upper: [10, 255, 255]\n    pixel_ratio_threshold: 0.02\n  baseline_diff:",
+)
+
+
+def reddish_silver_with_tape():
+    """赤みを帯びた銀色の面（ROIいっぱい）に赤テープが1本。"""
+    frame = make_frame(color=(120, 125, 190))
+    cv2.rectangle(frame, (150, 150), (330, 170), (20, 20, 215), -1)
+    cv2.rectangle(frame, (0, 0), (40, 40), (190, 190, 190), -1)  # 色のついていない灰色の部分
+    return frame
+
+
+@pytest.fixture
+def color_app(tmp_path):
+    app, path = make_app(tmp_path, COLOR_YAML)
+    yield app, path
+    app.gpio.close()
+
+
+def test_default_red_range_counts_reddish_silver_and_picking_the_tape_fixes_it(color_app):
+    app, _ = color_app
+    frame = reddish_silver_with_tape()
+    app._handle_command("set_roi", frame, x=0.2, y=0.3, w=0.6, h=0.5)
+    before = app.detector.detect(frame).score
+    assert before > 0.5  # 実機と同じ症状: 銀色の面を赤として数えている
+
+    result = app._handle_command("pick_color", frame, x=0.75, y=0.75, w=0.2, h=0.1)  # テープ上
+    after = app.detector.detect(frame).score
+    assert "登録しました" in result["message"]
+    assert after < 0.2  # 銀色の面は数えず、テープだけ
+
+
+def test_pick_color_needs_a_colored_sample(color_app):
+    app, _ = color_app
+    frame = reddish_silver_with_tape()
+    with pytest.raises(CalibrationError):
+        app._handle_command("pick_color", frame, x=0.0, y=0.0, w=0.1, h=0.1)  # 色の薄い範囲
+
+
+def test_picked_color_is_saved_and_survives_reload(color_app):
+    app, path = color_app
+    frame = reddish_silver_with_tape()
+    app._handle_command("set_roi", frame, x=0.2, y=0.3, w=0.6, h=0.5)
+    app._handle_command("pick_color", frame, x=0.75, y=0.75, w=0.2, h=0.1)
+    app._handle_command("capture_alignment", frame)
+    app._handle_command("save", frame)
+    saved = load_config(path).detection.color_mask
+    assert saved.hsv_lower == app._detection_cfg.color_mask.hsv_lower
+    assert saved.hsv_upper == app._detection_cfg.color_mask.hsv_upper
+
+
+def test_pick_color_is_refused_for_other_strategies(app):
+    with pytest.raises(CalibrationError):
+        app._handle_command("pick_color", make_frame(), x=0.1, y=0.1, w=0.2, h=0.2)
+    with pytest.raises(CalibrationError):
+        app._handle_command("toggle_mask", make_frame())
+
+
+def test_mask_view_and_status_report_the_color_info(color_app):
+    app, _ = color_app
+    frame = reddish_silver_with_tape()
+    app._handle_command("set_roi", frame, x=0.2, y=0.3, w=0.6, h=0.5)
+    app._process_frame(frame)
+    app._handle_command("toggle_mask", frame)
+    app._publish(frame, "test")
+    status = app.frame_buffer.get_status()
+    assert status["show_mask"] is True
+    assert len(status["color_hsv"]) == 6
+    assert status["roi_hsv"] is not None and len(status["roi_hsv"]) == 3
+    # 赤判定の表示は映像だけを変え、検知の結果には影響しない
+    assert app.detector.detect(frame).score > 0.5

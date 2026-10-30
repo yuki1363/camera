@@ -70,6 +70,7 @@ def save_calibration(
     thresholds: Optional[Dict[str, float]] = None,
     motion_roi=None,
     motion_ratio: Optional[float] = None,
+    color_hsv=None,
 ) -> None:
     """ROIと各方式のしきい値、補充の動き検知（範囲・しきい値）だけを書き換える。
     コメントや他の設定値はそのまま残す。"""
@@ -88,6 +89,12 @@ def save_calibration(
     for strategy, value in (thresholds or {}).items():
         section = detection.setdefault(strategy, {})
         section[_THRESHOLD_KEYS[strategy]] = round(float(value), 4)
+
+    if color_hsv is not None:
+        lower, upper = color_hsv
+        color_map = detection.setdefault("color_mask", {})
+        color_map["hsv_lower"] = [int(v) for v in lower]
+        color_map["hsv_upper"] = [int(v) for v in upper]
 
     refill = detection.setdefault("refill_detection", {})
     if motion_roi is not None:

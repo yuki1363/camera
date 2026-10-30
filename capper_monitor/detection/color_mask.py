@@ -38,6 +38,18 @@ class ColorMaskDetector(DetectionStrategy):
     def threshold(self, value: float) -> None:
         self._pixel_ratio_threshold = value
 
+    @property
+    def hsv_range(self):
+        return tuple(int(v) for v in self._hsv_lower), tuple(int(v) for v in self._hsv_upper)
+
+    def set_hsv_range(self, hsv_lower, hsv_upper) -> None:
+        self._hsv_lower = np.array(hsv_lower, dtype=np.uint8)
+        self._hsv_upper = np.array(hsv_upper, dtype=np.uint8)
+
+    def mask_of(self, bgr: np.ndarray) -> np.ndarray:
+        """画像のうち、設定した色の範囲に入る画素を255にしたマスクを返す（画面表示用）。"""
+        return self._mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV))
+
     def _mask(self, hsv: np.ndarray) -> np.ndarray:
         lower, upper = self._hsv_lower, self._hsv_upper
         if lower[0] <= upper[0]:
@@ -56,3 +68,33 @@ class ColorMaskDetector(DetectionStrategy):
             score=ratio,
             debug_frame=mask,
         )
+
+
+# 見本の色から範囲を作るときの余裕（色相・彩度・明度）。照明の揺れ・影を吸収する
+_HUE_MARGIN = 6
+_SV_LOWER_SCALE = 0.75
+
+
+def learn_hsv_range(sample_bgr: np.ndarray):
+    """見本（テープの上の画像）から、その色だけを拾うHSV範囲 (lower, upper) を作る。
+
+    色相は0/180をまたぐ色（赤）でも扱えるよう、90ずらして集計する。
+    下限は見本の下位5%に余裕を持たせ、上限は 255 にする（明るい側は広く許す）。
+    """
+    hsv = cv2.cvtColor(sample_bgr, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    if len(hsv) == 0:
+        raise ValueError("見本の画素がありません")
+    # 暗すぎる・色が薄すぎる画素は、テープ以外（影・ハイライト）なので見本から外す
+    colored = hsv[(hsv[:, 1] >= 40) & (hsv[:, 2] >= 40)]
+    if len(colored) < max(20, len(hsv) // 10):
+        raise ValueError("見本に色のついた部分が少なすぎます。テープの上だけを囲んでください")
+    shifted = (colored[:, 0].astype(int) + 90) % 180
+    h_lo = int(np.percentile(shifted, 5)) - _HUE_MARGIN
+    h_hi = int(np.percentile(shifted, 95)) + _HUE_MARGIN
+    if h_hi - h_lo > 40:
+        raise ValueError("見本の色がばらばらです。テープの上だけを囲んでください")
+    lower_h = (h_lo - 90) % 180
+    upper_h = (h_hi - 90) % 180
+    s_lo = max(40, int(np.percentile(colored[:, 1], 5) * _SV_LOWER_SCALE))
+    v_lo = max(40, int(np.percentile(colored[:, 2], 5) * _SV_LOWER_SCALE))
+    return (lower_h, s_lo, v_lo), (upper_h, 255, 255)

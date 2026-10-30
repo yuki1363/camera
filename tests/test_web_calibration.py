@@ -137,3 +137,15 @@ def test_motion_auto_is_forwarded_and_blocked_without_calibration():
     blocked = StubCommands()
     assert make_client_with(blocked, calibration_enabled=False).post("/api/motion_auto").status_code == 403
     assert blocked.calls == []
+
+
+def test_pick_color_and_mask_toggle_are_forwarded():
+    commands = StubCommands()
+    client = make_client_with(commands)
+    assert client.post("/api/pick_color", json={"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}).status_code == 200
+    assert client.post("/api/toggle_mask").status_code == 200
+    assert client.post("/api/pick_color", json={"x": "a"}).status_code == 400
+    assert commands.calls == [
+        ("pick_color", {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}),
+        ("toggle_mask", {}),
+    ]

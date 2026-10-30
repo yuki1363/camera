@@ -115,3 +115,55 @@ def test_red_outside_roi_is_ignored_with_wraparound_range():
     frame = draw_white_caps(make_frame())
     cv2.rectangle(frame, (0, 0), (40, 40), RED_HIGH_HUE_BGR, -1)
     assert detector.detect(frame).line_visible is False
+
+
+# --- 見本の色から範囲を学習する ---
+
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+
+from capper_monitor.detection.color_mask import learn_hsv_range  # noqa: E402
+
+
+def test_learn_range_from_red_sample_detects_red_and_rejects_silver():
+    sample = make_frame(40, 40, color=(30, 30, 200))  # 赤テープ
+    lower, upper = learn_hsv_range(sample)
+    assert lower[0] > upper[0] or lower[0] <= upper[0]  # 範囲が作れる
+    detector = ColorMaskDetector(roi=ROI, hsv_lower=lower, hsv_upper=upper, pixel_ratio_threshold=0.1)
+
+    tape = make_frame(color=(190, 190, 195))
+    x0, y0, x1, y1 = ROI.to_pixels(tape.shape)
+    cv2.rectangle(tape, (x0, y0), (x1, y1), (30, 30, 200), -1)
+    assert detector.detect(tape).line_visible is True
+    assert detector.detect(make_frame(color=(190, 190, 195))).line_visible is False  # 銀色
+
+
+def test_learn_range_is_tight_enough_to_reject_a_reddish_silver_cast():
+    # 蛍光灯・ホワイトバランスで赤みを帯びた銀色: 色相は赤に近いが彩度が低い
+    cast_silver = make_frame(color=(170, 175, 200))
+    sample = make_frame(40, 40, color=(30, 30, 200))
+    lower, upper = learn_hsv_range(sample)
+    detector = ColorMaskDetector(roi=ROI, hsv_lower=lower, hsv_upper=upper, pixel_ratio_threshold=0.1)
+    assert detector.detect(cast_silver).line_visible is False
+
+
+def test_learn_range_handles_hue_wraparound_red():
+    rng = np.random.default_rng(0)
+    sample = np.zeros((30, 30, 3), dtype=np.uint8)
+    sample[..., 2] = 200
+    sample[..., 0] = rng.integers(0, 60, (30, 30))  # 色相が0側と180側の両方に散る赤
+    sample[..., 1] = rng.integers(0, 20, (30, 30))
+    lower, upper = learn_hsv_range(sample)
+    assert lower[0] > upper[0]
+
+
+def test_learn_range_rejects_a_sample_without_color():
+    with pytest.raises(ValueError):
+        learn_hsv_range(make_frame(40, 40, color=(200, 200, 200)))
+
+
+def test_learn_range_rejects_a_mixed_sample():
+    mixed = make_frame(40, 40, color=(30, 30, 200))
+    mixed[:, :20] = (200, 30, 30)  # 赤と青が半分ずつ
+    with pytest.raises(ValueError):
+        learn_hsv_range(mixed)

@@ -68,6 +68,12 @@
       <p><span class="num"></span> 位置ズレ検知の基準を撮る（紫の枠の中は、いつも動かない場所にしておく）</p>
       <button id="btn-alignment">位置ズレ基準を撮影</button>
     </div>
+    <div class="step" id="step-color" hidden>
+      <p><span class="num"></span> テープの色を登録する。赤テープが見える状態で、テープの上だけを指でなぞり（他の物が入らないように）、下のボタンを押す。「赤判定を緑で表示」で、赤として数えている部分が緑に塗られる。テープだけが緑になり、銀色の面などが緑にならなければ成功</p>
+      <button id="btn-pick-color" disabled>選んだ範囲の色をテープの色にする</button>
+      <button id="btn-toggle-mask" style="margin-top:8px">赤判定を緑で表示（切り替え）</button>
+      <div class="info" id="color-info" style="margin:8px 0"></div>
+    </div>
     <div class="step" id="step-motion" hidden>
       <p><span class="num"></span> 補充の動き（点滅の条件）を合わせる。キャップを入れる場所を指でなぞり、下のボタンで動きを見る範囲にする（緑の枠）。人が横切るだけの場所は入れない。キャップを補充して「直近5秒の最大」を見て、補充していないときの値より上、補充中の最大より下にしきい値を合わせる</p>
       <button id="btn-motion-roi" disabled>選んだ範囲を補充の動き範囲にする</button>
@@ -114,7 +120,7 @@ const img = document.getElementById('stream');
 const canvas = document.getElementById('overlay');
 const ctx = canvas.getContext('2d');
 const thresholdInput = document.getElementById('threshold');
-const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save', 'btn-motion-roi', 'btn-motion-ratio', 'btn-motion-auto']
+const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save', 'btn-motion-roi', 'btn-motion-ratio', 'btn-motion-auto', 'btn-pick-color', 'btn-toggle-mask']
   .map(id => document.getElementById(id));
 
 let drag = null;
@@ -179,6 +185,7 @@ function updateButtons() {
   buttons.forEach(b => { b.disabled = busy || !CALIBRATION_ENABLED; });
   document.getElementById('btn-roi').disabled = busy || !CALIBRATION_ENABLED || !selection;
   document.getElementById('btn-motion-roi').disabled = busy || !CALIBRATION_ENABLED || !selection;
+  document.getElementById('btn-pick-color').disabled = busy || !CALIBRATION_ENABLED || !selection;
   const shutdownBtn = document.getElementById('btn-shutdown');
   if (shutdownBtn) shutdownBtn.disabled = busy || shutdownDone;
 }
@@ -223,6 +230,13 @@ document.getElementById('btn-motion-roi').addEventListener('click', async () => 
     draw();
   }
 });
+document.getElementById('btn-pick-color').addEventListener('click', async () => {
+  if (selection && await post('/api/pick_color', selection)) {
+    selection = null;
+    draw();
+  }
+});
+document.getElementById('btn-toggle-mask').addEventListener('click', () => post('/api/toggle_mask'));
 document.getElementById('btn-motion-auto').addEventListener('click', async () => {
   if (await post('/api/motion_auto')) {
     motionRatioEdited = false;
@@ -255,7 +269,7 @@ document.getElementById('btn-threshold').addEventListener('click', async () => {
 thresholdInput.addEventListener('input', () => { thresholdEdited = true; });
 
 // 基準フレーム撮影は baseline_diff 方式のときだけ必要。表示中の手順だけに番号を振り直す。
-const STEP_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥'];
+const STEP_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥', '⑦'];
 let lastStrategy = null;
 function updateSteps(strategy, motionEnabled) {
   const key = strategy + '/' + motionEnabled;
@@ -263,6 +277,7 @@ function updateSteps(strategy, motionEnabled) {
   lastStrategy = key;
   document.getElementById('step-baseline').hidden = strategy !== 'baseline_diff';
   document.getElementById('step-motion').hidden = !motionEnabled;
+  document.getElementById('step-color').hidden = strategy !== 'color_mask';
   let n = 0;
   document.querySelectorAll('.step').forEach(step => {
     if (!step.hidden) step.querySelector('.num').textContent = STEP_NUMBERS[n++];
@@ -294,6 +309,12 @@ async function pollStatus() {
     if (s.reason) lines.push('状況: ' + esc(REASON_LABELS[s.reason] || s.reason));
     document.getElementById('info').innerHTML = lines.join('<br>');
 
+    if (s.configured_strategy === 'color_mask' && s.color_hsv) {
+      const m = s.roi_hsv ? 'ROI内の色の中央値: 色相 <b>' + s.roi_hsv[0] + '</b> / 彩度 <b>' + s.roi_hsv[1] + '</b> / 明度 <b>' + s.roi_hsv[2] + '</b><br>' : '';
+      document.getElementById('color-info').innerHTML = m +
+        '検知する色: 色相 ' + s.color_hsv[0] + '〜' + s.color_hsv[3] + '（0と180はつながっている）、彩度 ' + s.color_hsv[1] + '以上、明度 ' + s.color_hsv[2] + '以上' +
+        (s.show_mask ? '<br>（緑＝赤として数えている部分を表示中）' : '');
+    }
     if (s.motion_enabled) {
       const range = s.motion_roi ? '指定した範囲' : '画面全体（範囲を指定してください）';
       document.getElementById('motion-info').innerHTML =
