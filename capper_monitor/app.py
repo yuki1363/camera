@@ -38,6 +38,10 @@ _NO_MOTION = MotionResult(motion_detected=False, ratio=0.0)
 # 補充の動き量の「直近ピーク」を出す期間（秒）。しきい値を決める目安としてスマホ画面に出す
 _MOTION_PEAK_WINDOW_S = 5.0
 
+# 静止時の動き量の最大値に対する、自動設定しきい値の倍率と下限
+_MOTION_AUTO_FACTOR = 2.0
+_MOTION_AUTO_MIN = 0.02
+
 _POWEROFF_COMMAND = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]
 
 _STRATEGY_LABELS = {"baseline_diff": "基準差分", "edge_density": "エッジ密度", "color_mask": "色マスク"}
@@ -62,7 +66,13 @@ class App:
             config.detection.debounce.on_delay_s, config.detection.debounce.off_delay_s
         )
         blink_interval_s = config.detection.refill_detection.blink_interval_ms / 1000.0
-        self.state_machine = AlarmStateMachine(debouncer, blink_interval_s)
+        refill = config.detection.refill_detection
+        self.state_machine = AlarmStateMachine(
+            debouncer,
+            blink_interval_s,
+            motion_hold_s=refill.motion_hold_ms / 1000.0,
+            motion_enter_s=refill.motion_enter_ms / 1000.0,
+        )
 
         self.gpio: GpioResources = create_gpio_resources(config.gpio, pin_factory=gpio_pin_factory)
         self.frame_buffer: Optional[FrameBuffer] = FrameBuffer() if config.web.enabled else None
@@ -267,6 +277,7 @@ class App:
             "set_threshold": self._cmd_set_threshold,
             "set_motion_roi": self._cmd_set_motion_roi,
             "set_motion_ratio": self._cmd_set_motion_ratio,
+            "auto_motion_ratio": self._cmd_auto_motion_ratio,
             "capture_baseline": self._cmd_capture_baseline,
             "capture_alignment": self._cmd_capture_alignment,
             "save": self._cmd_save,
@@ -307,6 +318,21 @@ class App:
         self.motion_detector.motion_ratio = value
         log_event(logger, logging.INFO, "calibration_motion_ratio_updated", value=f"{value:.4f}")
         return {"message": f"動きのしきい値を {value:.4f} にしました。「保存」で確定してください。"}
+
+    def _cmd_auto_motion_ratio(self, frame: np.ndarray) -> dict:
+        """補充も人の出入りもしていない状態の動き量（直近5秒の最大）から、しきい値を決める。"""
+        if self.motion_detector is None:
+            raise CalibrationError("補充の動き検知（detection.refill_detection）が無効です")
+        if not self._motion_history or self._motion_history[-1][0] - self._motion_history[0][0] < 2.0:
+            raise CalibrationError("動き量がまだ測れていません。数秒待ってからもう一度押してください。")
+        peak = self._motion_peak()
+        value = min(0.9, max(_MOTION_AUTO_MIN, round(peak * _MOTION_AUTO_FACTOR, 3)))
+        result = self._cmd_set_motion_ratio(frame, value)
+        result["message"] = (
+            f"静止時の動き量（最大 {peak:.3f}）から、しきい値を {value:.3f} にしました。"
+            "補充して点滅するか確認し、「保存」で確定してください。"
+        )
+        return result
 
     def _cmd_shutdown(self, frame: np.ndarray) -> dict:
         # 停止中にPLCへ「キャップ減少」を出しっぱなしにしないよう、先に出力をOFFにする

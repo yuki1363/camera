@@ -107,3 +107,41 @@ def test_calibration_commands_are_refused_when_only_shutdown_is_enabled(tmp_path
         assert app._handle_command("shutdown", make_frame())["message"]
     finally:
         app.gpio.close()
+
+
+def feed_motion(app, ratios, step=1.0):
+    """動き量の履歴（時刻, 比率）を直接入れる。"""
+    from capper_monitor.detection.motion import MotionResult
+
+    for i, ratio in enumerate(ratios):
+        app._record_motion(MotionResult(motion_detected=False, ratio=ratio), now=100.0 + i * step)
+
+
+def test_auto_motion_ratio_uses_twice_the_idle_peak(app):
+    feed_motion(app, [0.01, 0.03, 0.02, 0.01])
+    result = app._handle_command("auto_motion_ratio", make_frame())
+    assert app._detection_cfg.refill_detection.motion_ratio == 0.06
+    assert app.motion_detector.motion_ratio == 0.06
+    assert "0.060" in result["message"]
+
+
+def test_auto_motion_ratio_has_a_floor_and_a_ceiling(app):
+    feed_motion(app, [0.0, 0.0, 0.0, 0.0])
+    app._handle_command("auto_motion_ratio", make_frame())
+    assert app.motion_detector.motion_ratio == 0.02
+    feed_motion(app, [0.8, 0.9, 0.8, 0.9])
+    app._handle_command("auto_motion_ratio", make_frame())
+    assert app.motion_detector.motion_ratio == 0.9
+
+
+def test_auto_motion_ratio_needs_a_few_seconds_of_samples(app):
+    with pytest.raises(CalibrationError):
+        app._handle_command("auto_motion_ratio", make_frame())
+    feed_motion(app, [0.01], step=1.0)
+    with pytest.raises(CalibrationError):
+        app._handle_command("auto_motion_ratio", make_frame())
+
+
+def test_state_machine_gets_stabilizer_values_from_config(app):
+    assert app.state_machine._motion_hold_s == 3.0
+    assert app.state_machine._motion_enter_s == 0.5

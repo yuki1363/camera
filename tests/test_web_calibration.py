@@ -128,3 +128,12 @@ def test_calibrate_page_shows_shutdown_button_only_when_enabled():
     assert b'id="btn-shutdown"' not in make_client_with(StubCommands()).get("/calibrate").data
     page = make_client_with(StubCommands(), shutdown_enabled=True).get("/calibrate")
     assert b'id="btn-shutdown"' in page.data
+
+
+def test_motion_auto_is_forwarded_and_blocked_without_calibration():
+    commands = StubCommands()
+    assert make_client_with(commands).post("/api/motion_auto").status_code == 200
+    assert commands.calls == [("auto_motion_ratio", {})]
+    blocked = StubCommands()
+    assert make_client_with(blocked, calibration_enabled=False).post("/api/motion_auto").status_code == 403
+    assert blocked.calls == []

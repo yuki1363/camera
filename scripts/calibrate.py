@@ -102,7 +102,13 @@ def main(argv=None) -> int:
 
     debouncer = DetectionDebouncer(config.detection.debounce.on_delay_s, config.detection.debounce.off_delay_s)
     blink_interval_s = config.detection.refill_detection.blink_interval_ms / 1000.0
-    state_machine = AlarmStateMachine(debouncer, blink_interval_s)
+    refill_cfg = config.detection.refill_detection
+    state_machine = AlarmStateMachine(
+        debouncer,
+        blink_interval_s,
+        motion_hold_s=refill_cfg.motion_hold_ms / 1000.0,
+        motion_enter_s=refill_cfg.motion_enter_ms / 1000.0,
+    )
 
     try:
         cv2.namedWindow(WINDOW_MAIN)

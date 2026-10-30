@@ -155,3 +155,74 @@ def test_force_normal_is_no_op_transition_when_already_normal():
     r = m.force_normal(reason="reset")
     assert r.transitioned is False
     assert r.state == AlarmState.NORMAL
+
+
+# --- 補充中（動き）の判定を安定させるヒステリシス ---
+
+def make_motion_machine(hold_s=3.0, enter_s=0.5):
+    debouncer = DetectionDebouncer(on_delay_s=0.0, off_delay_s=0.0)
+    return AlarmStateMachine(debouncer, blink_interval_s=0.4, motion_hold_s=hold_s, motion_enter_s=enter_s)
+
+
+def step(machine, t, motion, line=True, reset=False):
+    return machine.update(raw_line_visible=line, motion_detected=motion, reset_requested=reset, now=t)
+
+
+def test_brief_motion_does_not_start_blinking():
+    m = make_motion_machine()
+    assert step(m, 0.0, False).state == AlarmState.STEADY
+    assert step(m, 0.1, True).state == AlarmState.STEADY
+    assert step(m, 0.2, True).state == AlarmState.STEADY
+    assert step(m, 0.3, False).state == AlarmState.STEADY
+    # 途切れたので、また最初から数え直す
+    assert step(m, 0.4, True).state == AlarmState.STEADY
+    assert step(m, 0.8, True).state == AlarmState.STEADY
+
+
+def test_sustained_motion_starts_blinking():
+    m = make_motion_machine()
+    step(m, 0.0, True)
+    assert step(m, 0.3, True).state == AlarmState.STEADY
+    assert step(m, 0.6, True).state == AlarmState.BLINK
+
+
+def test_flickering_motion_does_not_alternate_between_blink_and_steady():
+    m = make_motion_machine()
+    t = 0.0
+    states = []
+    for i in range(60):  # 0.1秒ごとに動きあり/なしが交互に入れ替わる
+        states.append(step(m, t, i % 2 == 0).state)
+        t += 0.1
+    assert set(states) == {AlarmState.STEADY}
+
+
+def test_blink_is_held_while_motion_flickers_off_and_returns_after_hold():
+    m = make_motion_machine(hold_s=3.0, enter_s=0.5)
+    step(m, 0.0, True)
+    assert step(m, 0.6, True).state == AlarmState.BLINK
+    assert step(m, 1.0, False).state == AlarmState.BLINK  # 途切れても保持
+    assert step(m, 3.0, False).state == AlarmState.BLINK
+    assert step(m, 3.7, False).state == AlarmState.STEADY  # 最後の動き(0.6)から3秒超
+
+
+def test_motion_hold_is_extended_by_new_motion():
+    m = make_motion_machine(hold_s=3.0, enter_s=0.5)
+    step(m, 0.0, True)
+    step(m, 0.6, True)
+    step(m, 2.5, True)
+    assert step(m, 5.0, False).state == AlarmState.BLINK
+    assert step(m, 5.6, False).state == AlarmState.STEADY
+
+
+def test_reset_clears_motion_hold():
+    m = make_motion_machine()
+    step(m, 0.0, True)
+    assert step(m, 0.6, True).state == AlarmState.BLINK
+    assert step(m, 0.7, False, reset=True).state == AlarmState.NORMAL
+    assert step(m, 0.8, False).state == AlarmState.STEADY  # 保持は残らない
+
+
+def test_zero_hold_and_enter_keep_previous_behavior():
+    m = make_motion_machine(hold_s=0.0, enter_s=0.0)
+    assert step(m, 0.0, True).state == AlarmState.BLINK
+    assert step(m, 0.1, False).state == AlarmState.STEADY

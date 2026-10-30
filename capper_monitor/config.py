@@ -200,6 +200,8 @@ class RefillDetectionConfig:
     motion_threshold: int = 25
     motion_ratio: float = 0.05
     blink_interval_ms: int = 400
+    motion_hold_ms: int = 3000   # 動きが途切れても「補充中」を保つ時間
+    motion_enter_ms: int = 500   # 動きがこの時間続いて初めて「補充中」に入る
     # 動きを見る範囲。None なら画面全体（人の手や体が横切っても動きとして数えてしまう）
     roi: Optional[RoiConfig] = None
 
@@ -212,6 +214,8 @@ class RefillDetectionConfig:
             raise ConfigError("detection.refill_detection.motion_ratio は0〜1の範囲で指定してください")
         if self.blink_interval_ms <= 0:
             raise ConfigError("detection.refill_detection.blink_interval_ms は正の値である必要があります")
+        if self.motion_hold_ms < 0 or self.motion_enter_ms < 0:
+            raise ConfigError("detection.refill_detection.motion_hold_ms/motion_enter_ms は0以上で指定してください")
 
 
 @dataclass(frozen=True)
@@ -506,6 +510,8 @@ def _build_config(raw: dict, base_dir: Path) -> AppConfig:
         motion_threshold=int(rd_raw.get("motion_threshold", 25)),
         motion_ratio=float(rd_raw.get("motion_ratio", 0.05)),
         blink_interval_ms=int(rd_raw.get("blink_interval_ms", 400)),
+        motion_hold_ms=int(rd_raw.get("motion_hold_ms", 3000)),
+        motion_enter_ms=int(rd_raw.get("motion_enter_ms", 500)),
         roi=(
             _roi_from_dict(rd_raw["roi"], "detection.refill_detection.roi")
             if rd_raw.get("roi") is not None

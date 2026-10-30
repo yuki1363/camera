@@ -278,3 +278,15 @@ def test_shutdown_is_off_by_default_in_code_but_on_in_template(tmp_path):
     path.write_text("web:\n  enabled: true\n", encoding="utf-8")
     assert load_config(path).web.shutdown_enabled is False
     assert load_config(DEFAULT_CONFIG_PATH).web.shutdown_enabled is True
+
+
+def test_motion_stabilizer_defaults():
+    refill = load_config(DEFAULT_CONFIG_PATH).detection.refill_detection
+    assert (refill.motion_enter_ms, refill.motion_hold_ms) == (500, 3000)
+
+
+def test_negative_motion_stabilizer_raises(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("detection:\n  refill_detection:\n    motion_hold_ms: -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)

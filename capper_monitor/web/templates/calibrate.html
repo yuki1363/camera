@@ -76,6 +76,8 @@
         <input id="motion-ratio" type="number" step="0.001" min="0.001" max="0.999" inputmode="decimal">
         <button id="btn-motion-ratio">動きのしきい値を適用</button>
       </div>
+      <button id="btn-motion-auto" style="margin-top:8px">静止時の動き量から自動設定（補充していないときに押す）</button>
+      <div id="motion-warning" class="notice" style="margin-top:8px" hidden></div>
     </div>
     <div class="step">
       <p><span class="num"></span> 満杯時とライン露出時のスコアをそれぞれ見て、その間の値をしきい値にする（スコア≧しきい値で「キャップ減少」）。キャップを出し入れして切り替わるか確認</p>
@@ -112,7 +114,7 @@ const img = document.getElementById('stream');
 const canvas = document.getElementById('overlay');
 const ctx = canvas.getContext('2d');
 const thresholdInput = document.getElementById('threshold');
-const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save', 'btn-motion-roi', 'btn-motion-ratio']
+const buttons = ['btn-roi', 'btn-baseline', 'btn-alignment', 'btn-threshold', 'btn-save', 'btn-motion-roi', 'btn-motion-ratio', 'btn-motion-auto']
   .map(id => document.getElementById(id));
 
 let drag = null;
@@ -221,6 +223,11 @@ document.getElementById('btn-motion-roi').addEventListener('click', async () => 
     draw();
   }
 });
+document.getElementById('btn-motion-auto').addEventListener('click', async () => {
+  if (await post('/api/motion_auto')) {
+    motionRatioEdited = false;
+  }
+});
 document.getElementById('btn-motion-ratio').addEventListener('click', async () => {
   if (await post('/api/motion_ratio', { value: parseFloat(motionRatioInput.value) })) {
     motionRatioEdited = false;
@@ -294,6 +301,12 @@ async function pollStatus() {
         ' / 直近5秒の最大: <b>' + fmt(s.motion_peak, 3) + '</b>' +
         ' / しきい値: <b>' + fmt(s.motion_threshold, 3) + '</b>' + (s.motion_detected ? '（動きあり）' : '') +
         '<br>見ている範囲: ' + range;
+      const warnings = [];
+      if (!s.motion_roi) warnings.push('動きを見る範囲が画面全体です。範囲を指定しないと、人の動きや照明のちらつきで点滅します。');
+      if (s.motion_peak >= s.motion_threshold) warnings.push('しきい値が直近5秒の動き量の最大以下です。補充していないなら、点滅⇔点灯を繰り返す可能性があります（補充中ならこのままで構いません）。');
+      const warn = document.getElementById('motion-warning');
+      warn.hidden = warnings.length === 0;
+      warn.textContent = warnings.join(' ');
       if (!motionRatioEdited && document.activeElement !== motionRatioInput && s.motion_threshold !== null && s.motion_threshold !== undefined) {
         motionRatioInput.value = Number(s.motion_threshold).toFixed(3);
       }

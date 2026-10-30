@@ -96,6 +96,10 @@ def create_app(frame_buffer: FrameBuffer, web_config: WebConfig, commands=None) 
             return jsonify(ok=False, error="しきい値の指定が不正です"), 400
         return run_command("set_motion_ratio", value=value)
 
+    @app.route("/api/motion_auto", methods=["POST"])
+    def api_motion_auto():
+        return run_command("auto_motion_ratio")
+
     @app.route("/api/shutdown", methods=["POST"])
     def api_shutdown():
         return run_command("shutdown")
