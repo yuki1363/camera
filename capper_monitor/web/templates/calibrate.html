@@ -308,6 +308,7 @@ async function pollStatus() {
       lines.push('基準フレーム: <b>' + (s.baseline_ready ? '撮影済み' : '未撮影（エッジ密度で代用中）') + '</b>');
     }
     lines.push('位置ズレ基準: <b>' + (s.alignment_ready ? '撮影済み（一致度 ' + fmt(s.alignment_correlation, 2) + '）' : '未撮影') + '</b>');
+    if (s.reset_active) lines.push('<b style="color:#f66">リセット入力が入っています（' + esc(s.reset_active) + '）。この間は検知しません</b>');
     if (s.reason) lines.push('状況: ' + esc(REASON_LABELS[s.reason] || s.reason));
     document.getElementById('info').innerHTML = lines.join('<br>');
 

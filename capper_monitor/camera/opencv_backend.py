@@ -24,11 +24,21 @@ class OpenCvBackend(CameraBackend):
         cap = cv2.VideoCapture(self._config.device_index)
         if not cap.isOpened():
             raise RuntimeError(f"カメラを開けません (device_index={self._config.device_index})")
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
+        # 形式(MJPG等)は解像度より先に指定する。後から指定すると、多くのUSBカメラで
+        # 解像度が既定(640x480)へ戻る、または高解像度を選べないまま動く
         if self._config.fourcc:
             fourcc = cv2.VideoWriter_fourcc(*self._config.fourcc)
             cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
+        actual = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        if actual != (self._config.width, self._config.height):
+            logger.warning(
+                "カメラが指定の解像度になりませんでした（指定 %dx%d、実際 %dx%d）",
+                self._config.width,
+                self._config.height,
+                *actual,
+            )
         self._cap = cap
 
     def read(self) -> Optional[np.ndarray]:

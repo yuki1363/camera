@@ -18,6 +18,11 @@ def main(argv=None) -> int:
         action="store_true",
         help="設定ファイルを検証するだけで起動しない（systemctl restart前の事前確認用）",
     )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="設定・権限・GPIO・カメラ・検知スコアを調べて問題箇所を表示する（サービスを止めてから実行）",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -29,6 +34,11 @@ def main(argv=None) -> int:
     if args.check_config:
         print("設定は正常です")
         return 0
+
+    if args.diagnose:
+        from capper_monitor.diagnose import run_diagnosis
+
+        return 1 if run_diagnosis(config, config_path=args.config) else 0
 
     setup_logging(config.logging)
     app = App(config, config_path=args.config)

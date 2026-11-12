@@ -47,6 +47,12 @@ _MOTION_AUTO_MIN = 0.02
 # スマホ画面に出す「直近のスコアの最小〜最大」の期間（秒）。しきい値を決める目安
 _SCORE_RANGE_WINDOW_S = 60.0
 
+# 同じ警告をログに出し続ける間隔（秒）。毎フレーム出すとログがすぐ一杯になり、他の記録が流れて消える
+_REPEAT_LOG_INTERVAL_S = 30.0
+
+# リセット入力がこの秒数入りっぱなしなら、配線・極性の間違いを疑って警告する
+_RESET_STUCK_WARN_S = 5.0
+
 _POWEROFF_COMMAND = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]
 
 _STRATEGY_LABELS = {"baseline_diff": "基準差分", "edge_density": "エッジ密度", "color_mask": "色マスク"}
@@ -108,6 +114,11 @@ class App:
         self._release_threshold: Optional[float] = None
         self._score_history: deque = deque()
         self._roi_hsv: Optional[list] = None
+        self._misaligned = False
+        self._last_misalignment_log_at = 0.0
+        self._reset_active_since: Optional[float] = None
+        self._reset_stuck_logged = False
+        self._reset_source: Optional[str] = None
 
     def run(self, install_signal_handlers: bool = True) -> None:
         self._lock.acquire()
@@ -156,19 +167,18 @@ class App:
 
     def _process_frame(self, frame: np.ndarray) -> None:
         now = time.monotonic()
-        reset_requested = self.gpio.reset_button.is_active or self.gpio.plc_reset_input.is_active
+        reset_requested = self._read_reset(now)
 
         if self.alignment_checker is not None and self.alignment_checker.is_ready:
             alignment = self.alignment_checker.check(frame)
             self._last_correlation = alignment.correlation
             if not alignment.ok:
-                log_event(
-                    logger, logging.WARNING, "camera_misalignment_detected", correlation=f"{alignment.correlation:.3f}"
-                )
+                self._log_misalignment(alignment.correlation, now)
                 self._apply_reset_only(reset_requested, now)
                 # 映像は止めない（スマホで見ながら位置ズレ基準を撮り直せるように）
                 self._publish(frame, "camera_misalignment")
                 return
+            self._clear_misalignment(alignment.correlation)
 
         try:
             detection_result = self.detector.detect(frame)
@@ -229,6 +239,54 @@ class App:
             log_event(
                 logger, logging.INFO, "alarm_state_changed", state=result.state.value, reason=result.reason
             )
+
+    def _read_reset(self, now: float) -> bool:
+        """リセット入力を読む。入りっぱなしの間は検知が効かない（常に正常へ戻される）ため、
+        配線・極性の間違いに気付けるよう、長く続いたら警告を残す。"""
+        sources = []
+        if self.gpio.reset_button.is_active:
+            sources.append("reset_button")
+        if self.gpio.plc_reset_input.is_active:
+            sources.append("plc_reset_input")
+        if not sources:
+            if self._reset_stuck_logged:
+                log_event(logger, logging.INFO, "reset_input_released")
+            self._reset_active_since = None
+            self._reset_stuck_logged = False
+            self._reset_source = None
+            return False
+        self._reset_source = "+".join(sources)
+        if self._reset_active_since is None:
+            self._reset_active_since = now
+        elif not self._reset_stuck_logged and now - self._reset_active_since >= _RESET_STUCK_WARN_S:
+            self._reset_stuck_logged = True
+            log_event(
+                logger,
+                logging.WARNING,
+                "reset_input_stuck",
+                source=self._reset_source,
+                hint="リセットが入ったままのため検知が無効です。配線と gpio の pull_up 設定を確認してください",
+            )
+        return True
+
+    def _log_misalignment(self, correlation: float, now: float) -> None:
+        if not self._misaligned:
+            self._misaligned = True
+        elif now - self._last_misalignment_log_at < _REPEAT_LOG_INTERVAL_S:
+            return
+        self._last_misalignment_log_at = now
+        log_event(
+            logger,
+            logging.WARNING,
+            "camera_misalignment_detected",
+            correlation=f"{correlation:.3f}",
+            hint="この間はライン検知を止め、出力は直前のままです",
+        )
+
+    def _clear_misalignment(self, correlation: float) -> None:
+        if self._misaligned:
+            self._misaligned = False
+            log_event(logger, logging.INFO, "camera_misalignment_cleared", correlation=f"{correlation:.3f}")
 
     def _log_detection_error(self, message: str) -> None:
         now = time.monotonic()
@@ -305,6 +363,8 @@ class App:
             motion_threshold=cfg.refill_detection.motion_ratio,
             motion_detected=self._last_motion.motion_detected,
             motion_roi=_roi_dict(cfg.refill_detection.roi),
+            reset_active=self._reset_source,
+            output_on=self.gpio.alarm_output.is_on,
         )
 
     def _draw_mask_view(self, image: np.ndarray) -> None:

@@ -373,6 +373,25 @@ journalctl -u capper-monitor -f
   使われるため多重起動防止ロックで停止します。手動で動かすときは先に
   `sudo systemctl stop capper-monitor` してください。
 
+## うまく動かないとき（自己診断）
+
+サービスを止めてから自己診断を実行すると、設定・書き込み権限・GPIO・カメラ・検知スコアを
+順に調べ、問題のある箇所を `[NG]`／`[注意]` で表示します（PLCへの出力は動かしません）。
+
+```bash
+sudo systemctl stop capper-monitor
+/opt/capper-monitor/.venv/bin/python -m capper_monitor --config /etc/capper-monitor/config.yaml --diagnose
+sudo systemctl start capper-monitor
+```
+
+サービスが起動しない場合は `journalctl -u capper-monitor -n 50 --no-pager` も確認してください。
+稼働中のログでは次の警告が手がかりになります。
+
+- `reset_input_stuck`: リセット入力が5秒以上入ったまま。この間は常に「正常」へ戻され、検知しません
+  （配線か `gpio.*.pull_up` の極性違い）。スマホ調整画面にも赤字で表示されます。
+- `camera_misalignment_detected`: 位置ズレ判定中。この間はライン検知が止まり、出力は直前のまま
+  変わりません（初回と以後30秒ごとに記録、解消時に `camera_misalignment_cleared`）。
+
 ## リセットの挙動（非ラッチ方式）
 
 「ラインが見えなくなったら」「リセットしたら」のどちらも独立して復帰条件になる、という
