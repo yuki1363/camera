@@ -380,7 +380,8 @@ journalctl -u capper-monitor -f
 
 ```bash
 sudo systemctl stop capper-monitor
-/opt/capper-monitor/.venv/bin/python -m capper_monitor --config /etc/capper-monitor/config.yaml --diagnose
+cd /opt/capper-monitor   # このフォルダで実行する（別の場所だと No module named capper_monitor になる）
+.venv/bin/python -m capper_monitor --config /etc/capper-monitor/config.yaml --diagnose
 sudo systemctl start capper-monitor
 ```
 
