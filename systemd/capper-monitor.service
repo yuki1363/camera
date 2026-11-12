@@ -1,7 +1,7 @@
 [Unit]
 Description=Capper Box Line Detection Monitor
-After=multi-user.target network-online.target
-Wants=network-online.target
+# ネットワークや他のサービスの起動は待たない（監視はネットワークなしで動き、スマホ画面は
+# 0.0.0.0 で待ち受けるのでWi-Fiが後から立ち上がってもつながる）。待つと起動が十数秒遅れる。
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
